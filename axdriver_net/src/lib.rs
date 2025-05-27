@@ -3,6 +3,9 @@
 #![no_std]
 #![cfg_attr(doc, feature(doc_auto_cfg))]
 
+#[cfg(feature = "dwmac")]
+/// DWMAC Ethernet driver for StarFive VisionFive 2
+pub mod dwmac;
 #[cfg(feature = "fxmac")]
 /// fxmac driver for PhytiumPi
 pub mod fxmac;

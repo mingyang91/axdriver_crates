@@ -1,24 +1,28 @@
 [package]
 name = "axdriver_net"
 edition = "2021"
-authors = ["Yuekai Jia <equation618@gmail.com>", "ChengXiang Qi <kuangjux@outlook.com>"]
+authors = [
+    "Yuekai Jia <equation618@gmail.com>",
+    "ChengXiang Qi <kuangjux@outlook.com>",
+]
 description = "Common traits and types for network device (NIC) drivers"
 documentation = "https://arceos-org.github.io/axdriver_crates/axdriver_net"
 keywords = ["arceos", "driver", "nic"]
-version.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-categories.workspace = true
+version = "0.1.2"
+license = "GPL-3.0 OR Apache-2.0"
+homepage = "https://github.com/arceos-org"
+repository = "https://github.com/arceos-org/axdriver_crates"
+categories = ["embedded", "hardware-support", "no-std"]
 
 [features]
 default = []
 ixgbe = ["dep:ixgbe-driver"]
 fxmac = ["dep:fxmac_rs"]
+dwmac = []
 
 [dependencies]
 spin = "0.9"
 log = "0.4"
-axdriver_base = { workspace = true }
-ixgbe-driver = { git = "https://github.com/KuangjuX/ixgbe-driver.git", rev = "8e5eb74", optional = true}
+axdriver_base = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "v0.1.2" }
+ixgbe-driver = { git = "https://github.com/KuangjuX/ixgbe-driver.git", rev = "8e5eb74", optional = true }
 fxmac_rs = { git = "https://github.com/elliott10/fxmac_rs.git", rev = "0dbc3916", optional = true }
