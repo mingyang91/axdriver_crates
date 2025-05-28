@@ -6,6 +6,7 @@
 use crate::{EthernetAddress, NetBufPtr, NetDriverOps};
 use axdriver_base::{BaseDriverOps, DevError, DevResult, DeviceType};
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Hardware abstraction layer for DWMAC driver.
 pub trait DwmacHal: Send + Sync {
@@ -27,6 +28,108 @@ pub trait DwmacHal: Send + Sync {
 
 /// Physical address type.
 pub type PhysAddr = usize;
+
+/// Number of TX descriptors in the ring.
+const TX_DESC_COUNT: usize = 256;
+
+/// Number of RX descriptors in the ring.
+const RX_DESC_COUNT: usize = 256;
+
+/// Maximum frame size (MTU + headers).
+const MAX_FRAME_SIZE: usize = 1536;
+
+/// DMA descriptor structure for enhanced descriptors.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy)]
+struct DmaDescriptor {
+    /// Status and control word.
+    status: u32,
+    /// Buffer size and control.
+    control: u32,
+    /// Buffer 1 address.
+    buffer1: u32,
+    /// Buffer 2 address or next descriptor.
+    buffer2: u32,
+}
+
+impl DmaDescriptor {
+    const fn new() -> Self {
+        Self {
+            status: 0,
+            control: 0,
+            buffer1: 0,
+            buffer2: 0,
+        }
+    }
+}
+
+/// TX descriptor status bits.
+mod tx_desc_status {
+    pub const OWN: u32 = 1 << 31;
+    pub const IC: u32 = 1 << 30; // Interrupt on completion
+    pub const LS: u32 = 1 << 29; // Last segment
+    pub const FS: u32 = 1 << 28; // First segment
+    pub const DC: u32 = 1 << 27; // Disable CRC
+    pub const DP: u32 = 1 << 26; // Disable padding
+    pub const TTSE: u32 = 1 << 25; // Transmit timestamp enable
+    pub const CIC_NONE: u32 = 0 << 22;
+    pub const CIC_IP: u32 = 1 << 22;
+    pub const CIC_IP_PAYLOAD: u32 = 2 << 22;
+    pub const CIC_IP_PAYLOAD_PSEUDO: u32 = 3 << 22;
+    pub const TER: u32 = 1 << 21; // Transmit end of ring
+    pub const TCH: u32 = 1 << 20; // Second address chained
+}
+
+/// RX descriptor status bits.
+mod rx_desc_status {
+    pub const OWN: u32 = 1 << 31;
+    pub const AFM: u32 = 1 << 30; // Destination address filter fail
+    pub const FL_MASK: u32 = 0x3FFF << 16; // Frame length
+    pub const FL_SHIFT: u32 = 16;
+    pub const ES: u32 = 1 << 15; // Error summary
+    pub const DE: u32 = 1 << 14; // Descriptor error
+    pub const SAF: u32 = 1 << 13; // Source address filter fail
+    pub const LE: u32 = 1 << 12; // Length error
+    pub const OE: u32 = 1 << 11; // Overflow error
+    pub const VLAN: u32 = 1 << 10; // VLAN tag
+    pub const FS: u32 = 1 << 9; // First descriptor
+    pub const LS: u32 = 1 << 8; // Last descriptor
+    pub const IPC_GIANT: u32 = 1 << 7; // IPC giant frame
+    pub const LC: u32 = 1 << 6; // Late collision
+    pub const FT: u32 = 1 << 5; // Frame type
+    pub const RWT: u32 = 1 << 4; // Receive watchdog timeout
+    pub const RE: u32 = 1 << 3; // Receive error
+    pub const DBE: u32 = 1 << 2; // Dribble bit error
+    pub const CE: u32 = 1 << 1; // CRC error
+    pub const PCE: u32 = 1 << 0; // Payload checksum error
+}
+
+/// RX descriptor control bits.
+mod rx_desc_control {
+    pub const RER: u32 = 1 << 25; // Receive end of ring
+    pub const RCH: u32 = 1 << 24; // Second address chained
+    pub const RBS2_MASK: u32 = 0x1FFF << 11; // Receive buffer 2 size
+    pub const RBS1_MASK: u32 = 0x1FFF; // Receive buffer 1 size
+}
+
+/// DMA status register bits.
+mod dma_status {
+    pub const NIS: u32 = 1 << 16; // Normal interrupt summary
+    pub const AIS: u32 = 1 << 15; // Abnormal interrupt summary
+    pub const ERI: u32 = 1 << 14; // Early receive interrupt
+    pub const FBI: u32 = 1 << 13; // Fatal bus error interrupt
+    pub const ETI: u32 = 1 << 10; // Early transmit interrupt
+    pub const RWT: u32 = 1 << 9; // Receive watchdog timeout
+    pub const RPS: u32 = 1 << 8; // Receive process stopped
+    pub const RU: u32 = 1 << 7; // Receive buffer unavailable
+    pub const RI: u32 = 1 << 6; // Receive interrupt
+    pub const UNF: u32 = 1 << 5; // Transmit underflow
+    pub const OVF: u32 = 1 << 4; // Receive overflow
+    pub const TJT: u32 = 1 << 3; // Transmit jabber timeout
+    pub const TU: u32 = 1 << 2; // Transmit buffer unavailable
+    pub const TPS: u32 = 1 << 1; // Transmit process stopped
+    pub const TI: u32 = 1 << 0; // Transmit interrupt
+}
 
 /// DWMAC register offsets (Synopsys DesignWare MAC v5.10a).
 mod regs {
@@ -157,6 +260,20 @@ mod dma_operation_mode {
 pub struct DwmacNic<H: DwmacHal> {
     base_addr: NonNull<u8>,
     mac_addr: [u8; 6],
+
+    // TX descriptor ring
+    tx_descriptors: NonNull<DmaDescriptor>,
+    tx_descriptors_phys: PhysAddr,
+    tx_buffers: [Option<NetBufPtr>; TX_DESC_COUNT],
+    tx_next: AtomicUsize,
+    tx_clean: AtomicUsize,
+
+    // RX descriptor ring
+    rx_descriptors: NonNull<DmaDescriptor>,
+    rx_descriptors_phys: PhysAddr,
+    rx_buffers: [Option<NetBufPtr>; RX_DESC_COUNT],
+    rx_next: AtomicUsize,
+
     _phantom: core::marker::PhantomData<H>,
 }
 
@@ -169,17 +286,47 @@ unsafe impl<H: DwmacHal> Sync for DwmacNic<H> {}
 impl<H: DwmacHal> DwmacNic<H> {
     /// Initialize the DWMAC device.
     pub fn init(base_addr: NonNull<u8>, _size: usize) -> Result<Self, &'static str> {
-        let nic = Self {
+        // Allocate DMA-coherent memory for descriptor rings
+        let tx_desc_size = core::mem::size_of::<DmaDescriptor>() * TX_DESC_COUNT;
+        let rx_desc_size = core::mem::size_of::<DmaDescriptor>() * RX_DESC_COUNT;
+
+        let (tx_descriptors_phys, tx_descriptors_virt) = H::dma_alloc(tx_desc_size);
+        let (rx_descriptors_phys, rx_descriptors_virt) = H::dma_alloc(rx_desc_size);
+
+        if tx_descriptors_phys == 0 || rx_descriptors_phys == 0 {
+            return Err("Failed to allocate DMA memory for descriptors");
+        }
+
+        let tx_descriptors = NonNull::new(tx_descriptors_virt.as_ptr() as *mut DmaDescriptor)
+            .ok_or("Invalid TX descriptor pointer")?;
+        let rx_descriptors = NonNull::new(rx_descriptors_virt.as_ptr() as *mut DmaDescriptor)
+            .ok_or("Invalid RX descriptor pointer")?;
+
+        let mut nic = Self {
             base_addr,
             mac_addr: [0x6c, 0xcf, 0x39, 0x00, 0x5d, 0x34], // Default MAC from VisionFive 2
+
+            tx_descriptors,
+            tx_descriptors_phys,
+            tx_buffers: [const { None }; TX_DESC_COUNT],
+            tx_next: AtomicUsize::new(0),
+            tx_clean: AtomicUsize::new(0),
+
+            rx_descriptors,
+            rx_descriptors_phys,
+            rx_buffers: [const { None }; RX_DESC_COUNT],
+            rx_next: AtomicUsize::new(0),
+
             _phantom: core::marker::PhantomData,
         };
 
         // Initialize hardware
         nic.reset_device()?;
+        nic.setup_descriptor_rings()?;
         nic.configure_mac()?;
         nic.configure_dma()?;
         nic.setup_mac_address();
+        nic.start_dma()?;
 
         log::info!("DWMAC device initialized successfully");
         Ok(nic)
@@ -272,6 +419,139 @@ impl<H: DwmacHal> DwmacNic<H> {
         );
     }
 
+    /// Setup DMA descriptor rings.
+    fn setup_descriptor_rings(&mut self) -> Result<(), &'static str> {
+        // Initialize TX descriptors
+        unsafe {
+            let tx_desc_slice =
+                core::slice::from_raw_parts_mut(self.tx_descriptors.as_ptr(), TX_DESC_COUNT);
+
+            for (i, desc) in tx_desc_slice.iter_mut().enumerate() {
+                *desc = DmaDescriptor::new();
+                // Set up chaining for ring buffer
+                if i == TX_DESC_COUNT - 1 {
+                    desc.control |= tx_desc_status::TER; // End of ring
+                } else {
+                    desc.buffer2 = (self.tx_descriptors_phys
+                        + (i + 1) * core::mem::size_of::<DmaDescriptor>())
+                        as u32;
+                    desc.control |= tx_desc_status::TCH; // Second address chained
+                }
+            }
+        }
+
+        // Initialize RX descriptors and allocate buffers
+        unsafe {
+            let rx_desc_slice =
+                core::slice::from_raw_parts_mut(self.rx_descriptors.as_ptr(), RX_DESC_COUNT);
+
+            for (i, desc) in rx_desc_slice.iter_mut().enumerate() {
+                *desc = DmaDescriptor::new();
+
+                // Allocate RX buffer
+                let (buf_phys, buf_virt) = H::dma_alloc(MAX_FRAME_SIZE);
+                if buf_phys == 0 {
+                    return Err("Failed to allocate RX buffer");
+                }
+
+                let rx_buf = NetBufPtr::new(buf_virt, buf_virt, MAX_FRAME_SIZE);
+                self.rx_buffers[i] = Some(rx_buf);
+
+                desc.buffer1 = buf_phys as u32;
+                desc.control = MAX_FRAME_SIZE as u32 & rx_desc_control::RBS1_MASK;
+
+                // Set up chaining for ring buffer
+                if i == RX_DESC_COUNT - 1 {
+                    desc.control |= rx_desc_control::RER; // End of ring
+                } else {
+                    desc.buffer2 = (self.rx_descriptors_phys
+                        + (i + 1) * core::mem::size_of::<DmaDescriptor>())
+                        as u32;
+                    desc.control |= rx_desc_control::RCH; // Second address chained
+                }
+
+                // Give ownership to DMA
+                desc.status = rx_desc_status::OWN;
+            }
+        }
+
+        // Set descriptor list addresses
+        self.write_reg(
+            regs::DMA_TX_DESCRIPTOR_LIST,
+            self.tx_descriptors_phys as u32,
+        );
+        self.write_reg(
+            regs::DMA_RX_DESCRIPTOR_LIST,
+            self.rx_descriptors_phys as u32,
+        );
+
+        log::debug!("DWMAC descriptor rings initialized");
+        Ok(())
+    }
+
+    /// Start DMA operations.
+    fn start_dma(&self) -> Result<(), &'static str> {
+        // Enable DMA interrupts
+        let int_enable = dma_status::NIS | dma_status::AIS | dma_status::RI | dma_status::TI;
+        self.write_reg(regs::DMA_INTERRUPT_ENABLE, int_enable);
+
+        // Start TX and RX DMA
+        let mut op_mode = self.read_reg(regs::DMA_OPERATION_MODE);
+        op_mode |= dma_operation_mode::START_STOP_TX | dma_operation_mode::START_STOP_RX;
+        self.write_reg(regs::DMA_OPERATION_MODE, op_mode);
+
+        log::debug!("DWMAC DMA started");
+        Ok(())
+    }
+
+    /// Handle DMA interrupts.
+    pub fn handle_interrupt(&mut self) {
+        let status = self.read_reg(regs::DMA_STATUS);
+
+        // Clear interrupts
+        self.write_reg(regs::DMA_STATUS, status);
+
+        if status & dma_status::TI != 0 {
+            // TX interrupt - reclaim completed buffers
+            self.reclaim_tx_buffers();
+        }
+
+        if status & dma_status::RI != 0 {
+            // RX interrupt - packets available
+            log::trace!("RX interrupt received");
+        }
+
+        if status & dma_status::AIS != 0 {
+            log::warn!("DMA abnormal interrupt: {:#x}", status);
+        }
+    }
+
+    /// Reclaim completed TX buffers.
+    fn reclaim_tx_buffers(&mut self) {
+        let mut clean_idx = self.tx_clean.load(Ordering::Acquire);
+        let next_idx = self.tx_next.load(Ordering::Acquire);
+
+        while clean_idx != next_idx {
+            unsafe {
+                let desc = &mut *self.tx_descriptors.as_ptr().add(clean_idx);
+
+                // Check if descriptor is still owned by DMA
+                if desc.status & tx_desc_status::OWN != 0 {
+                    break;
+                }
+
+                // Free the buffer
+                if let Some(buf) = self.tx_buffers[clean_idx].take() {
+                    drop(buf);
+                }
+
+                clean_idx = (clean_idx + 1) % TX_DESC_COUNT;
+            }
+        }
+
+        self.tx_clean.store(clean_idx, Ordering::Release);
+    }
+
     /// Read a 32-bit register.
     fn read_reg(&self, offset: usize) -> u32 {
         unsafe {
@@ -305,48 +585,164 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn can_transmit(&self) -> bool {
-        // For now, always return true (simplified implementation)
-        true
+        let next_idx = self.tx_next.load(Ordering::Acquire);
+        let clean_idx = self.tx_clean.load(Ordering::Acquire);
+
+        // Check if there's space in the TX ring
+        let next_next = (next_idx + 1) % TX_DESC_COUNT;
+        next_next != clean_idx
     }
 
     fn can_receive(&self) -> bool {
-        // For now, always return false (no packets available)
-        false
+        let rx_idx = self.rx_next.load(Ordering::Acquire);
+        unsafe {
+            let desc = &*self.rx_descriptors.as_ptr().add(rx_idx);
+            // Check if descriptor is owned by CPU (packet received)
+            desc.status & rx_desc_status::OWN == 0
+        }
     }
 
     fn rx_queue_size(&self) -> usize {
-        256 // Configurable
+        RX_DESC_COUNT
     }
 
     fn tx_queue_size(&self) -> usize {
-        256 // Configurable
+        TX_DESC_COUNT
     }
 
-    fn recycle_rx_buffer(&mut self, _buf: NetBufPtr) -> DevResult {
-        // TODO: Return RX buffer to hardware descriptor ring
+    fn recycle_rx_buffer(&mut self, rx_buf: NetBufPtr) -> DevResult {
+        let rx_idx = self.rx_next.load(Ordering::Acquire);
+
+        unsafe {
+            let desc = &mut *self.rx_descriptors.as_ptr().add(rx_idx);
+
+            // Reset the buffer
+            let buf_phys =
+                H::mmio_virt_to_phys(NonNull::new(rx_buf.raw_ptr()).unwrap(), MAX_FRAME_SIZE);
+            desc.buffer1 = buf_phys as u32;
+            desc.control = (desc.control & !rx_desc_control::RBS1_MASK)
+                | (MAX_FRAME_SIZE as u32 & rx_desc_control::RBS1_MASK);
+
+            // Give ownership back to DMA
+            desc.status = rx_desc_status::OWN;
+
+            // Store the buffer
+            self.rx_buffers[rx_idx] = Some(rx_buf);
+
+            // Advance to next descriptor
+            let next_rx = (rx_idx + 1) % RX_DESC_COUNT;
+            self.rx_next.store(next_rx, Ordering::Release);
+        }
+
+        // Poll demand to resume RX if needed
+        self.write_reg(regs::DMA_RX_POLL_DEMAND, 1);
+
         Ok(())
     }
 
     fn recycle_tx_buffers(&mut self) -> DevResult {
-        // TODO: Reclaim completed TX buffers from descriptor ring
+        self.reclaim_tx_buffers();
         Ok(())
     }
 
-    fn transmit(&mut self, _buf: NetBufPtr) -> DevResult {
-        // TODO: Submit packet for transmission via DMA descriptor ring
-        log::warn!("DWMAC transmit not yet implemented");
-        Err(DevError::Unsupported)
+    fn transmit(&mut self, tx_buf: NetBufPtr) -> DevResult {
+        if !self.can_transmit() {
+            return Err(DevError::Again);
+        }
+
+        let tx_idx = self.tx_next.load(Ordering::Acquire);
+
+        unsafe {
+            let desc = &mut *self.tx_descriptors.as_ptr().add(tx_idx);
+
+            // Set up buffer
+            let buf_phys =
+                H::mmio_virt_to_phys(NonNull::new(tx_buf.raw_ptr()).unwrap(), tx_buf.packet_len());
+            desc.buffer1 = buf_phys as u32;
+            desc.control = (tx_buf.packet_len() as u32 & 0x1FFF)
+                | tx_desc_status::FS
+                | tx_desc_status::LS
+                | tx_desc_status::IC
+                | tx_desc_status::CIC_IP_PAYLOAD_PSEUDO;
+
+            // Store the buffer
+            self.tx_buffers[tx_idx] = Some(tx_buf);
+
+            // Give ownership to DMA
+            desc.status = tx_desc_status::OWN;
+
+            // Advance to next descriptor
+            let next_tx = (tx_idx + 1) % TX_DESC_COUNT;
+            self.tx_next.store(next_tx, Ordering::Release);
+        }
+
+        // Poll demand to start transmission
+        self.write_reg(regs::DMA_TX_POLL_DEMAND, 1);
+
+        log::trace!("Packet queued for transmission");
+        Ok(())
     }
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
-        // TODO: Receive packet from hardware via DMA descriptor ring
-        Err(DevError::Again)
+        if !self.can_receive() {
+            return Err(DevError::Again);
+        }
+
+        let rx_idx = self.rx_next.load(Ordering::Acquire);
+
+        unsafe {
+            let desc = &*self.rx_descriptors.as_ptr().add(rx_idx);
+
+            // Check for errors
+            if desc.status & rx_desc_status::ES != 0 {
+                log::warn!("RX error: {:#x}", desc.status);
+                // Skip this packet and recycle the buffer
+                let desc_mut = &mut *self.rx_descriptors.as_ptr().add(rx_idx);
+                desc_mut.status = rx_desc_status::OWN;
+                let next_rx = (rx_idx + 1) % RX_DESC_COUNT;
+                self.rx_next.store(next_rx, Ordering::Release);
+                return Err(DevError::Again);
+            }
+
+            // Extract frame length
+            let frame_len =
+                ((desc.status & rx_desc_status::FL_MASK) >> rx_desc_status::FL_SHIFT) as usize;
+            if frame_len < 4 {
+                log::warn!("Invalid frame length: {}", frame_len);
+                return Err(DevError::Again);
+            }
+
+            // Remove CRC from length
+            let packet_len = frame_len - 4;
+
+            // Take the buffer
+            if let Some(rx_buf) = self.rx_buffers[rx_idx].take() {
+                // Create a new NetBufPtr with the correct packet length
+                let new_rx_buf = NetBufPtr::new(
+                    NonNull::new(rx_buf.raw_ptr()).unwrap(),
+                    NonNull::new(rx_buf.raw_ptr()).unwrap(),
+                    packet_len,
+                );
+
+                log::trace!("Received packet of {} bytes", packet_len);
+                Ok(new_rx_buf)
+            } else {
+                log::error!("No RX buffer available at index {}", rx_idx);
+                Err(DevError::BadState)
+            }
+        }
     }
 
-    fn alloc_tx_buffer(&mut self, _size: usize) -> DevResult<NetBufPtr> {
-        // TODO: Implement proper buffer allocation with DMA-coherent memory
-        // For now, return an error since we haven't implemented the full buffer management
-        log::warn!("DWMAC alloc_tx_buffer not yet implemented");
-        Err(DevError::Unsupported)
+    fn alloc_tx_buffer(&mut self, size: usize) -> DevResult<NetBufPtr> {
+        if size > MAX_FRAME_SIZE {
+            return Err(DevError::InvalidParam);
+        }
+
+        let (buf_phys, buf_virt) = H::dma_alloc(size);
+        if buf_phys == 0 {
+            return Err(DevError::NoMemory);
+        }
+
+        Ok(NetBufPtr::new(buf_virt, buf_virt, size))
     }
 }
