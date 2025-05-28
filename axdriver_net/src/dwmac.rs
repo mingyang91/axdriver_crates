@@ -286,16 +286,36 @@ unsafe impl<H: DwmacHal> Sync for DwmacNic<H> {}
 impl<H: DwmacHal> DwmacNic<H> {
     /// Initialize the DWMAC device.
     pub fn init(base_addr: NonNull<u8>, _size: usize) -> Result<Self, &'static str> {
+        log::info!("DWMAC init: base_addr={:p}", base_addr.as_ptr());
+
         // Allocate DMA-coherent memory for descriptor rings
         let tx_desc_size = core::mem::size_of::<DmaDescriptor>() * TX_DESC_COUNT;
         let rx_desc_size = core::mem::size_of::<DmaDescriptor>() * RX_DESC_COUNT;
 
+        log::debug!("Allocating TX descriptors: {} bytes", tx_desc_size);
         let (tx_descriptors_phys, tx_descriptors_virt) = H::dma_alloc(tx_desc_size);
+        log::debug!("Allocating RX descriptors: {} bytes", rx_desc_size);
         let (rx_descriptors_phys, rx_descriptors_virt) = H::dma_alloc(rx_desc_size);
 
         if tx_descriptors_phys == 0 || rx_descriptors_phys == 0 {
+            log::error!(
+                "Failed to allocate DMA memory: tx_phys={:#x}, rx_phys={:#x}",
+                tx_descriptors_phys,
+                rx_descriptors_phys
+            );
             return Err("Failed to allocate DMA memory for descriptors");
         }
+
+        log::debug!(
+            "TX descriptors: phys={:#x}, virt={:p}",
+            tx_descriptors_phys,
+            tx_descriptors_virt.as_ptr()
+        );
+        log::debug!(
+            "RX descriptors: phys={:#x}, virt={:p}",
+            rx_descriptors_phys,
+            rx_descriptors_virt.as_ptr()
+        );
 
         let tx_descriptors = NonNull::new(tx_descriptors_virt.as_ptr() as *mut DmaDescriptor)
             .ok_or("Invalid TX descriptor pointer")?;
@@ -321,11 +341,17 @@ impl<H: DwmacHal> DwmacNic<H> {
         };
 
         // Initialize hardware
+        log::debug!("Resetting DWMAC device...");
         nic.reset_device()?;
+        log::debug!("Setting up descriptor rings...");
         nic.setup_descriptor_rings()?;
+        log::debug!("Configuring MAC...");
         nic.configure_mac()?;
+        log::debug!("Configuring DMA...");
         nic.configure_dma()?;
+        log::debug!("Setting up MAC address...");
         nic.setup_mac_address();
+        log::debug!("Starting DMA...");
         nic.start_dma()?;
 
         log::info!("DWMAC device initialized successfully");
@@ -334,24 +360,37 @@ impl<H: DwmacHal> DwmacNic<H> {
 
     /// Reset the DWMAC device.
     fn reset_device(&self) -> Result<(), &'static str> {
-        // Software reset
+        log::debug!("Starting DWMAC device reset");
+
+        // Check if we can read from the device first
+        let version = self.read_reg(regs::MAC_VERSION);
+        log::debug!("DWMAC version register: {:#x}", version);
+
+        // Perform software reset
         self.write_reg(regs::DMA_BUS_MODE, dma_bus_mode::SOFTWARE_RESET);
 
-        // Wait for reset to complete
-        let start = core::time::Duration::from_millis(0);
-        let timeout = core::time::Duration::from_millis(1000);
+        // Wait for reset to complete with timeout (simple counter-based)
+        let mut timeout_counter = 0;
+        const MAX_TIMEOUT_ITERATIONS: u32 = 1000;
 
         loop {
-            if (self.read_reg(regs::DMA_BUS_MODE) & dma_bus_mode::SOFTWARE_RESET) == 0 {
+            let bus_mode = self.read_reg(regs::DMA_BUS_MODE);
+            if bus_mode & dma_bus_mode::SOFTWARE_RESET == 0 {
+                log::debug!("DWMAC reset completed, bus_mode={:#x}", bus_mode);
                 break;
             }
-            H::wait_until(core::time::Duration::from_millis(1))?;
-            if start.as_millis() > timeout.as_millis() {
-                return Err("DWMAC reset timeout");
+
+            timeout_counter += 1;
+            if timeout_counter > MAX_TIMEOUT_ITERATIONS {
+                log::error!("DWMAC reset timeout, bus_mode={:#x}", bus_mode);
+                return Err("Device reset timeout");
             }
+
+            // Small delay before checking again
+            H::wait_until(core::time::Duration::from_millis(1))?;
         }
 
-        log::debug!("DWMAC device reset completed");
+        log::debug!("DWMAC device reset completed successfully");
         Ok(())
     }
 
@@ -421,6 +460,12 @@ impl<H: DwmacHal> DwmacNic<H> {
 
     /// Setup DMA descriptor rings.
     fn setup_descriptor_rings(&mut self) -> Result<(), &'static str> {
+        log::debug!(
+            "Setting up TX descriptor ring at phys={:#x}, virt={:p}",
+            self.tx_descriptors_phys,
+            self.tx_descriptors.as_ptr()
+        );
+
         // Initialize TX descriptors
         unsafe {
             let tx_desc_slice =
@@ -437,8 +482,25 @@ impl<H: DwmacHal> DwmacNic<H> {
                         as u32;
                     desc.control |= tx_desc_status::TCH; // Second address chained
                 }
+
+                if i < 4 {
+                    log::trace!(
+                        "TX desc[{}]: status={:#x}, control={:#x}, buffer1={:#x}, buffer2={:#x}",
+                        i,
+                        desc.status,
+                        desc.control,
+                        desc.buffer1,
+                        desc.buffer2
+                    );
+                }
             }
         }
+
+        log::debug!(
+            "Setting up RX descriptor ring at phys={:#x}, virt={:p}",
+            self.rx_descriptors_phys,
+            self.rx_descriptors.as_ptr()
+        );
 
         // Initialize RX descriptors and allocate buffers
         unsafe {
@@ -449,8 +511,10 @@ impl<H: DwmacHal> DwmacNic<H> {
                 *desc = DmaDescriptor::new();
 
                 // Allocate RX buffer
+                log::trace!("Allocating RX buffer {} of size {}", i, MAX_FRAME_SIZE);
                 let (buf_phys, buf_virt) = H::dma_alloc(MAX_FRAME_SIZE);
                 if buf_phys == 0 {
+                    log::error!("Failed to allocate RX buffer {}", i);
                     return Err("Failed to allocate RX buffer");
                 }
 
@@ -472,13 +536,33 @@ impl<H: DwmacHal> DwmacNic<H> {
 
                 // Give ownership to DMA
                 desc.status = rx_desc_status::OWN;
+
+                if i < 4 {
+                    log::trace!(
+                        "RX desc[{}]: status={:#x}, control={:#x}, buffer1={:#x}, buffer2={:#x}",
+                        i,
+                        desc.status,
+                        desc.control,
+                        desc.buffer1,
+                        desc.buffer2
+                    );
+                }
             }
         }
 
         // Set descriptor list addresses
+        log::debug!(
+            "Setting TX descriptor list address: {:#x}",
+            self.tx_descriptors_phys
+        );
         self.write_reg(
             regs::DMA_TX_DESCRIPTOR_LIST,
             self.tx_descriptors_phys as u32,
+        );
+
+        log::debug!(
+            "Setting RX descriptor list address: {:#x}",
+            self.rx_descriptors_phys
         );
         self.write_reg(
             regs::DMA_RX_DESCRIPTOR_LIST,
@@ -556,7 +640,23 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn read_reg(&self, offset: usize) -> u32 {
         unsafe {
             let addr = self.base_addr.as_ptr().add(offset) as *const u32;
-            core::ptr::read_volatile(addr)
+            // Validate the address is within expected MMIO range
+            let addr_val = addr as usize;
+            if addr_val < 0x16030000 || addr_val >= 0x16040000 {
+                log::warn!(
+                    "DWMAC read_reg: suspicious address {:#x} (offset {:#x})",
+                    addr_val,
+                    offset
+                );
+            }
+            let value = core::ptr::read_volatile(addr);
+            log::trace!(
+                "DWMAC read_reg: offset={:#x}, addr={:#x}, value={:#x}",
+                offset,
+                addr_val,
+                value
+            );
+            value
         }
     }
 
@@ -564,6 +664,21 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn write_reg(&self, offset: usize, value: u32) {
         unsafe {
             let addr = self.base_addr.as_ptr().add(offset) as *mut u32;
+            // Validate the address is within expected MMIO range
+            let addr_val = addr as usize;
+            if addr_val < 0x16030000 || addr_val >= 0x16040000 {
+                log::warn!(
+                    "DWMAC write_reg: suspicious address {:#x} (offset {:#x})",
+                    addr_val,
+                    offset
+                );
+            }
+            log::trace!(
+                "DWMAC write_reg: offset={:#x}, addr={:#x}, value={:#x}",
+                offset,
+                addr_val,
+                value
+            );
             core::ptr::write_volatile(addr, value);
         }
     }
