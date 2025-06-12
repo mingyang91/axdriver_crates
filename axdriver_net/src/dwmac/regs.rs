@@ -3,47 +3,6 @@ pub mod phy {
     use bitflags::bitflags;
 
     bitflags! {
-
-    // #define DMA_CHAN_INTR_NORMAL_4_10	(DMA_CHAN_INTR_ENA_NIE_4_10 | \
-    //     DMA_CHAN_INTR_ENA_RIE | \
-    //     DMA_CHAN_INTR_ENA_TIE)
-
-    // #define DMA_CHAN_INTR_ABNORMAL_4_10	(DMA_CHAN_INTR_ENA_AIE_4_10 | \
-    //     DMA_CHAN_INTR_ENA_FBE)
-
-    // #define DMA_CHAN_INTR_DEFAULT_MASK_4_10	(DMA_CHAN_INTR_NORMAL_4_10 | \
-    //     DMA_CHAN_INTR_ABNORMAL_4_10)
-        pub struct InterruptMask: u32 {
-            const TIE = 1 << 0;
-            const TSE = 1 << 1;
-            const TBUE = 1 << 2;
-            const RIE = 1 << 6;
-            const RBUE = 1 << 7;
-            const RSE = 1 << 8;
-            const RWE = 1 << 9;
-            const ETE = 1 << 10;
-            const ERE = 1 << 11;
-            const FBE = 1 << 12;
-            const CDE = 1 << 13;
-            const AIE_4_10 = 1 << 14;
-            const NIE_4_10 = 1 << 15;
-            const AIE = 1 << 15;
-            const NIE = 1 << 16;
-            const NORMAL_4_10 = Self::NIE_4_10.bits()
-                              | Self::RIE.bits()
-                              | Self::TIE.bits();
-            const ABNORMAL_4_10 = Self::AIE_4_10.bits()
-                                | Self::FBE.bits();
-            const DEFAULT_MASK_4_10 = Self::NORMAL_4_10.bits()
-                                    | Self::ABNORMAL_4_10.bits();
-        }
-    }
-
-    pub const PHY_ID1: u16 = 0x02;
-    pub const PHY_ID2: u16 = 0x03;
-
-    pub const CHIP_CFG: u16 = 0xA001;
-    bitflags! {
         // 0xA001
         pub struct YT8531CChipCfg: u16 {
             const SW_RST_N_MODE = 1 << 15;
@@ -163,7 +122,7 @@ pub mod mac {
     use bitflags::bitflags;
 
     pub const CONFIG: usize = 0x0000;
-    pub const FRAME_FILTER: usize = 0x0004;
+    pub const FRAME_FILTER: usize = 0x0008;
     pub const GMII_ADDRESS: usize = 0x0200;
     pub const GMII_DATA: usize = 0x0204;
 
@@ -180,7 +139,7 @@ pub mod mac {
     pub const INTERRUPT_ENABLE: usize = 0x00b4;
 
     /*  MAC Interrupt bitmap*/
-    // #define GMAC_INT_RGSMIIS		BIT(0)
+    // #define GMAC_INT_RGMII		BIT(0)
     // #define GMAC_INT_PCS_LINK		BIT(1)
     // #define GMAC_INT_PCS_ANE		BIT(2)
     // #define GMAC_INT_PCS_PHYIS		BIT(3)
@@ -195,7 +154,7 @@ pub mod mac {
     //     GMAC_INT_TSIE)
     bitflags! {
         pub struct MacInterruptEnable: u32 {
-            const RGSMIIS = 1 << 0;
+            const RGMII = 1 << 0;
             const PCS_LINK = 1 << 1;
             const PCS_ANE = 1 << 2;
             const PCS_PHYIS = 1 << 3;
@@ -290,11 +249,27 @@ pub mod mac {
         | MacConfig::WD.bits()
         | MacConfig::JD.bits()
         | MacConfig::DM.bits();
+
+    bitflags! {
+        pub struct PacketFilter: u32 {
+            const PR = 1 << 0;
+            const HMC = 1 << 2;
+            const PM = 1 << 4;
+            const PCF = 1 << 7;
+            const HPF = 1 << 10;
+            const VTFE = 1 << 16;
+            const IPFE = 1 << 20;
+            const RA = 1 << 31;
+        }
+    }
 }
 
 /// DMA registers
 pub mod dma {
+    use bitflags::bitflags;
+
     pub const BUS_MODE: usize = 0x1000;
+    pub const SYS_BUS_MODE: usize = 0x1004;
     pub const CHAN_BASE_ADDR: usize = 0x1100;
     pub const CHAN_TX_CTRL: usize = CHAN_BASE_ADDR + 0x04;
     pub const CHAN_RX_CTRL: usize = CHAN_BASE_ADDR + 0x08;
@@ -306,6 +281,7 @@ pub mod dma {
     pub const CHAN_RX_END_ADDR: usize = CHAN_BASE_ADDR + 0x28;
     pub const CHAN_TX_RING_LEN: usize = CHAN_BASE_ADDR + 0x2c;
     pub const CHAN_RX_RING_LEN: usize = CHAN_BASE_ADDR + 0x30;
+    pub const CHAN_INTR_ENABLE: usize = CHAN_BASE_ADDR + 0x34;
 
     pub const TX_POLL_DEMAND: usize = 0x1004;
     pub const RX_POLL_DEMAND: usize = 0x1008;
@@ -330,4 +306,60 @@ pub mod dma {
     pub const GMAC_Q0_TX_FLOW_CTRL_TFE: u32 = 0xffff_0002;
 
     pub const MTL_CHAN_RX_OP_MODE: usize = 0x0d00 + 0x30;
+
+    pub const DMA_BUS_MODE_INTM_MODE1: u32 = 0b1 << 16;
+
+    bitflags! {
+        pub struct DmaSysBusMode: u32 {
+            const MB = 1 << 14;
+            const AXI_1KBBE = 1 << 13;
+            const AAL = 1 << 12;
+            const EAME = 1 << 11;
+            const AXI_BLEN256 = 1 << 7;
+            const AXI_BLEN128 = 1 << 6;
+            const AXI_BLEN64 = 1 << 5;
+            const AXI_BLEN32 = 1 << 4;
+            const AXI_BLEN16 = 1 << 3;
+            const AXI_BLEN8 = 1 << 2;
+            const AXI_BLEN4 = 1 << 1;
+            const FB = 1 << 0;
+        }
+    }
+
+    bitflags! {
+
+    // #define DMA_CHAN_INTR_NORMAL_4_10	(DMA_CHAN_INTR_ENA_NIE_4_10 | \
+    //     DMA_CHAN_INTR_ENA_RIE | \
+    //     DMA_CHAN_INTR_ENA_TIE)
+
+    // #define DMA_CHAN_INTR_ABNORMAL_4_10	(DMA_CHAN_INTR_ENA_AIE_4_10 | \
+    //     DMA_CHAN_INTR_ENA_FBE)
+
+    // #define DMA_CHAN_INTR_DEFAULT_MASK_4_10	(DMA_CHAN_INTR_NORMAL_4_10 | \
+    //     DMA_CHAN_INTR_ABNORMAL_4_10)
+        pub struct InterruptMask: u32 {
+            const TIE = 1 << 0;
+            const TSE = 1 << 1;
+            const TBUE = 1 << 2;
+            const RIE = 1 << 6;
+            const RBUE = 1 << 7;
+            const RSE = 1 << 8;
+            const RWE = 1 << 9;
+            const ETE = 1 << 10;
+            const ERE = 1 << 11;
+            const FBE = 1 << 12;
+            const CDE = 1 << 13;
+            const AIE_4_10 = 1 << 14;
+            const NIE_4_10 = 1 << 15;
+            const AIE = 1 << 15;
+            const NIE = 1 << 16;
+            const NORMAL_4_10 = Self::NIE_4_10.bits()
+                              | Self::RIE.bits()
+                              | Self::TIE.bits();
+            const ABNORMAL_4_10 = Self::AIE_4_10.bits()
+                                | Self::FBE.bits();
+            const DEFAULT_MASK_4_10 = Self::NORMAL_4_10.bits()
+                                    | Self::ABNORMAL_4_10.bits();
+        }
+    }
 }
