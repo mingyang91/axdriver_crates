@@ -281,12 +281,11 @@ pub mod dma {
     pub const CHAN_RX_END_ADDR: usize = CHAN_BASE_ADDR + 0x28;
     pub const CHAN_TX_RING_LEN: usize = CHAN_BASE_ADDR + 0x2c;
     pub const CHAN_RX_RING_LEN: usize = CHAN_BASE_ADDR + 0x30;
+
     pub const CHAN_INTR_ENABLE: usize = CHAN_BASE_ADDR + 0x34;
 
     pub const TX_POLL_DEMAND: usize = 0x1004;
     pub const RX_POLL_DEMAND: usize = 0x1008;
-    pub const RX_DESCRIPTOR_LIST: usize = 0x100C;
-    pub const TX_DESCRIPTOR_LIST: usize = 0x1010;
     pub const STATUS: usize = 0x1014;
     pub const OPERATION_MODE: usize = 0x1018;
 
@@ -294,13 +293,29 @@ pub mod dma {
     pub const DMA_RESET: u32 = 1 << 0;
 
     // DMA_OPERATION_MODE bits
-    pub const DMA_START_TX: u32 = 1 << 13;
-    pub const DMA_START_RX: u32 = 1 << 1;
+    pub const DMA_START_TX: u32 = 1 << 0;
+    pub const DMA_TX_PBL_8: u32 = 8 << 16;
+    pub const DMA_START_RX: u32 = 1 << 0;
+    pub const DMA_RX_PBL_8: u32 = 8 << 16;
 
     // Descriptor bits
     pub const DESC_OWN: u32 = 1 << 31;
     pub const DESC_FIRST: u32 = 1 << 28;
     pub const DESC_LAST: u32 = 1 << 29;
+
+    // TX描述符状态位（TDES0）
+    pub const TX_FIRST_SEGMENT: u32 = 1 << 28; // 第一段[9]
+    pub const TX_LAST_SEGMENT: u32 = 1 << 29; // 最后一段[9]
+    pub const TX_INTERRUPT_COMPLETE: u32 = 1 << 30; // 完成中断[9]
+    pub const TX_ERROR_SUMMARY: u32 = 1 << 15; // 错误总结位
+
+    // RX描述符状态位（RDES0）
+    pub const RX_FIRST_DESCRIPTOR: u32 = 1 << 9; // 第一个描述符[23]
+    pub const RX_LAST_DESCRIPTOR: u32 = 1 << 8; // 最后一个描述符[23]
+    pub const RX_ERROR_SUMMARY: u32 = 1 << 15; // 错误总结位[23]
+    pub const RX_DESCRIPTOR_ERROR: u32 = 1 << 14; // 描述符错误[23]
+    pub const RX_FRAME_LENGTH_MASK: u32 = 0x3FFF0000; // 帧长度字段[23]
+    pub const RX_FRAME_LENGTH_SHIFT: u32 = 16; // 帧长度位移[23]
 
     pub const GMAC_Q0_TX_FLOW_CTRL: usize = 0x0070;
     pub const GMAC_Q0_TX_FLOW_CTRL_TFE: u32 = 0xffff_0002;
