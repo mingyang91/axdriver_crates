@@ -222,15 +222,18 @@ impl<H: DwmacHal> DwmacNic<H> {
         }
 
         nic.reset_dma()?;
-        nic.configure_mac()?;
         nic.setup_descriptor_rings()?;
         nic.start_dma()?;
         nic.enable_dma_interrupts()?;
-        // nic.setup_mac_address();
+        nic.setup_mac_address();
         nic.set_qos()?;
+        nic.start_mac()?;
 
         let version = nic.read_reg(regs::mac::VERSION);
         log::info!("   🔍 MAC version: {:#x}", version);
+
+        let intr_status = nic.read_reg(regs::dma::INTR_STATUS);
+        log::info!("   🔍 DMA INTR_STATUS: {:#x}", intr_status);
 
         log::info!("✅ DWMAC initialization complete");
         Ok(nic)
@@ -258,6 +261,20 @@ impl<H: DwmacHal> DwmacNic<H> {
         log::info!("   🔍 Interrupt status: {:#x}", status);
         self.write_reg(regs::mac::INTERRUPT_STATUS, 0);
 
+        if status != 0 {
+            log::info!("🔧 Waiting for GMAC interrupt status to clear...");
+            for _ in 0..100 {
+                if self.read_reg(regs::mac::INTERRUPT_STATUS) != 0 {
+                    break;
+                }
+                H::wait_until(core::time::Duration::from_millis(1))?;
+            }
+        }
+
+        if self.read_reg(regs::mac::INTERRUPT_STATUS) != 0 {
+            log::error!("GMAC interrupt status not cleared");
+        }
+
         self.write_reg(regs::mac::INTERRUPT_ENABLE, regs::mac::INT_DEFAULT_ENABLE);
         let interrupt_enable = self.read_reg(regs::mac::INTERRUPT_ENABLE);
         log::debug!("   🔍 Interrupt enable: {:#x}", interrupt_enable);
@@ -271,6 +288,13 @@ impl<H: DwmacHal> DwmacNic<H> {
     /// Reset the hardware
     fn reset_dma(&self) -> Result<(), &'static str> {
         log::info!("🔄 Resetting DMA Mode");
+
+        log::info!("🔧 Disabling MAC");
+        let config = self.read_reg(regs::mac::CONFIG);
+        self.write_reg(
+            regs::mac::CONFIG,
+            config & !regs::mac::MacConfig::RE.bits() & !regs::mac::MacConfig::TE.bits(),
+        );
 
         // Apply software reset
         let bus_mode = self.read_reg(regs::dma::BUS_MODE);
@@ -401,18 +425,14 @@ impl<H: DwmacHal> DwmacNic<H> {
     }
 
     /// Configure MAC settings
-    fn configure_mac(&self) -> Result<(), &'static str> {
+    fn start_mac(&self) -> Result<(), &'static str> {
         log::info!("🔧 Configuring MAC");
 
         self.write_reg(regs::mac::CONFIG, regs::mac::CONFIG_DEFAULT);
+        log::info!("🔧 MAC enabled");
 
         let version = self.read_reg(regs::mac::VERSION);
         log::info!("   🔍 MAC version: {:#x}", version);
-
-        self.setup_mac_address();
-        let mac_addr: u64 = (self.read_reg(regs::mac::ADDRESS0_HIGH) as u64) << 32
-            | (self.read_reg(regs::mac::ADDRESS0_LOW) as u64);
-        log::info!("   🔍 MAC address: {:#x}", mac_addr);
 
         self.write_reg(
             regs::mac::FRAME_FILTER,

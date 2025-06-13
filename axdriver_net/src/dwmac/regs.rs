@@ -270,6 +270,7 @@ pub mod dma {
 
     pub const BUS_MODE: usize = 0x1000;
     pub const SYS_BUS_MODE: usize = 0x1004;
+    pub const INTR_STATUS: usize = 0x1008;
     pub const CHAN_BASE_ADDR: usize = 0x1100;
     pub const CHAN_TX_CTRL: usize = CHAN_BASE_ADDR + 0x04;
     pub const CHAN_RX_CTRL: usize = CHAN_BASE_ADDR + 0x08;
