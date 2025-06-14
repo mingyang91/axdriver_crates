@@ -269,10 +269,10 @@ impl<H: DwmacHal> DwmacNic<H> {
                 }
                 H::wait_until(core::time::Duration::from_millis(1))?;
             }
-        }
 
-        if self.read_reg(regs::mac::INTERRUPT_STATUS) != 0 {
-            log::error!("GMAC interrupt status not cleared");
+            if self.read_reg(regs::mac::INTERRUPT_STATUS) != 0 {
+                log::error!("GMAC interrupt status not cleared");
+            }
         }
 
         self.write_reg(regs::mac::INTERRUPT_ENABLE, regs::mac::INT_DEFAULT_ENABLE);
@@ -570,12 +570,14 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn can_transmit(&self) -> bool {
+        log::trace!("can_transmit");
         let current_desc = self.tx_ring.descriptors[self.tx_current()];
         let status = current_desc.basic.status();
         (status & regs::dma::DESC_OWN) == 0
     }
 
     fn can_receive(&self) -> bool {
+        log::trace!("can_receive");
         let current_desc = self.rx_ring.descriptors[self.rx_current()];
         let status = current_desc.basic.status();
         (status & regs::dma::DESC_OWN) == 0 && (status & regs::dma::DESC_LAST) != 0
@@ -590,6 +592,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn transmit(&mut self, tx_buf: NetBufPtr) -> DevResult {
+        log::trace!("transmit");
         if !self.can_transmit() {
             return Err(DevError::Again);
         }
@@ -615,6 +618,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
+        log::trace!("receive");
         if !self.can_receive() {
             return Err(DevError::Again);
         }
