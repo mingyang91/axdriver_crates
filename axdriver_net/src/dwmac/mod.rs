@@ -6,18 +6,13 @@
 
 mod mdio;
 mod regs;
-use crate::dwmac::mdio::{Yt8531cPhy, YT8531C_BMSR, YT8531C_EXT_CHIP_CONFIG, YT8531C_PHYID1};
-use crate::dwmac::regs::dma::{
-    BUS_MODE, CHAN_RX_END_ADDR, DESC_OWN, DMA_RESET, RX_ERROR_SUMMARY, RX_FRAME_LENGTH_MASK,
-    RX_FRAME_LENGTH_SHIFT, TX_ERROR_SUMMARY, TX_FIRST_SEGMENT, TX_INTERRUPT_COMPLETE,
-    TX_LAST_SEGMENT,
-};
-use crate::dwmac::regs::mac::{GMII_ADDRESS, YTPHY_PAGE_DATA, YTPHY_PAGE_SELECT};
+use crate::dwmac::mdio::{Yt8531cPhy, YT8531C_BMSR, YT8531C_EXT_CHIP_CONFIG};
+use crate::dwmac::regs::dma::{BUS_MODE, DESC_OWN, RDES3};
 use crate::{EthernetAddress, NetBufPtr, NetDriverOps};
 use axdriver_base::{BaseDriverOps, DevError, DevResult, DeviceType};
 use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{fence, AtomicBool, AtomicUsize, Ordering};
-use core::{u16, u8, usize};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::{u8, usize};
 
 /// Hardware abstraction layer for DWMAC driver
 pub trait DwmacHal: Send + Sync {
@@ -53,70 +48,89 @@ const MAX_FRAME_SIZE: usize = 1536;
 #[repr(C, align(16))]
 #[derive(Debug, Copy, Clone)]
 struct DmaDescriptor {
-    status: u32,
-    control: u32,
-    buffer1: u32,
-    buffer2: u32,
+    /// Buffer 1 address (low 32 bits) or additional info
+    des0: u32,
+    /// Buffer 2 address (low 32 bits) or additional info
+    des1: u32,
+    /// Buffer sizs, VLAN tag, control bits
+    des2: u32,
+    /// Control bits, packet length, status
+    des3: u32,
 }
 
 impl DmaDescriptor {
-    fn status(&self) -> u32 {
-        unsafe { read_volatile(&self.status as *const u32) }
+    fn des0(&self) -> u32 {
+        unsafe { read_volatile(&self.des0 as *const u32) }
     }
 
-    fn set_status(&mut self, status: u32) {
-        unsafe { write_volatile(&mut self.status, status) };
+    fn set_des0(&mut self, des0: u32) {
+        unsafe { write_volatile(&mut self.des0, des0) };
     }
 
-    fn control(&self) -> u32 {
-        unsafe { read_volatile(&self.control as *const u32) }
+    fn des1(&self) -> u32 {
+        unsafe { read_volatile(&self.des1 as *const u32) }
     }
 
-    fn set_control(&mut self, control: u32) {
-        unsafe { write_volatile(&mut self.control, control) };
+    fn set_des1(&mut self, des1: u32) {
+        unsafe { write_volatile(&mut self.des1, des1) };
     }
 
-    fn buffer1(&self) -> u32 {
-        unsafe { read_volatile(&self.buffer1 as *const u32) }
+    fn des2(&self) -> u32 {
+        unsafe { read_volatile(&self.des2 as *const u32) }
     }
 
-    fn set_buffer1(&mut self, buffer1: u32) {
-        unsafe { write_volatile(&mut self.buffer1, buffer1) };
+    fn set_des2(&mut self, des2: u32) {
+        unsafe { write_volatile(&mut self.des2, des2) };
     }
 
-    fn buffer2(&self) -> u32 {
-        unsafe { read_volatile(&self.buffer2 as *const u32) }
+    fn des3(&self) -> u32 {
+        unsafe { read_volatile(&self.des3 as *const u32) }
     }
 
-    fn set_buffer2(&mut self, buffer2: u32) {
-        unsafe { write_volatile(&mut self.buffer2, buffer2) };
+    fn set_des3(&mut self, des3: u32) {
+        unsafe { write_volatile(&mut self.des3, des3) };
+    }
+
+    /// Set the descriptor as owned by DMA hardware
+    pub fn set_own(&mut self) {
+        self.des3 |= DESC_OWN;
+    }
+
+    /// Clear the DMA ownership bit
+    pub fn clear_own(&mut self) {
+        self.des3 &= !DESC_OWN;
+    }
+
+    /// Check if descriptor is owned by DMA hardware
+    pub fn is_owned_by_dma(&self) -> bool {
+        (self.des3 & DESC_OWN) != 0
     }
 }
 
 #[repr(C, align(16))]
 #[derive(Debug, Copy, Clone)]
-struct DmaExtendedDescriptor {
+pub struct DmaExtendedDescriptor {
     basic: DmaDescriptor,
     // Extended fields for newer DWMAC versions
-    ext_status: u32,
-    reserved1: u32,
-    timestamp_low: u32,
-    timestamp_high: u32,
+    // ext_status: u32,
+    // reserved1: u32,
+    // timestamp_low: u32,
+    // timestamp_high: u32,
 }
 
 impl DmaExtendedDescriptor {
     const fn new() -> Self {
         Self {
             basic: DmaDescriptor {
-                status: 0,
-                control: 0,
-                buffer1: 0,
-                buffer2: 0,
+                des0: 0,
+                des1: 0,
+                des2: 0,
+                des3: 0,
             },
-            ext_status: 0,
-            reserved1: 0,
-            timestamp_low: 0,
-            timestamp_high: 0,
+            // ext_status: 0,
+            // reserved1: 0,
+            // timestamp_low: 0,
+            // timestamp_high: 0,
         }
     }
 }
@@ -124,8 +138,9 @@ impl DmaExtendedDescriptor {
 pub struct DescriptorRing<const N: usize, H: DwmacHal> {
     descriptors: [DmaExtendedDescriptor; N],
     buffers: [*mut u8; N],
-    current_index: AtomicUsize,
     buffer_size: usize,
+    head: AtomicUsize,
+    tail: AtomicUsize,
     _phantom: core::marker::PhantomData<H>,
 }
 
@@ -134,42 +149,43 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
         Self {
             descriptors: [DmaExtendedDescriptor::new(); N],
             buffers: [core::ptr::null_mut(); N],
-            current_index: AtomicUsize::new(0),
             buffer_size,
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
             _phantom: core::marker::PhantomData,
         }
     }
 
     pub fn init_rx_ring(&mut self) -> Result<(), &'static str> {
-        for i in 0..N {
+        for (i, desc) in self.descriptors.iter_mut().enumerate() {
             let (buffer_phy, _) = H::dma_alloc(self.buffer_size);
+            desc.basic.des0 = buffer_phy as u32;
+            desc.basic.des1 = 0x0;
+            desc.basic.des2 = 0x0;
+            desc.basic.des3 = RDES3::BUFFER1_VALID_ADDR.bits() | RDES3::INT_ON_COMPLETION_EN.bits();
+            desc.basic.set_own();
             self.buffers[i] = buffer_phy as *mut u8;
-
-            self.descriptors[i].basic.status = DESC_OWN; // OWN bit
-            self.descriptors[i].basic.control = self.buffer_size as u32 & 0x1fff; // Buffer size
-            self.descriptors[i].basic.buffer1 = buffer_phy as u32;
-
-            if i == N - 1 {
-                self.descriptors[i].basic.buffer2 = &self.descriptors[0] as *const _ as u32;
-            } else {
-                self.descriptors[i].basic.buffer2 = &self.descriptors[i + 1] as *const _ as u32;
-            }
         }
+        self.head.store(0, Ordering::Relaxed);
+        self.tail.store(0, Ordering::Relaxed);
 
         Ok(())
     }
 
     pub fn init_tx_ring(&mut self) -> Result<(), &'static str> {
-        for i in 0..N {
-            self.descriptors[i].basic.status = 0x0; // OWN bit
-            self.descriptors[i].basic.control = 0x0;
-            self.descriptors[i].basic.buffer1 = 0x0;
+        for desc in self.descriptors.iter_mut() {
+            desc.basic.des0 = 0x0;
+            desc.basic.des1 = 0x0;
+            desc.basic.des2 = 0x0;
+            desc.basic.des3 = 0x0;
 
-            if i == N - 1 {
-                self.descriptors[i].basic.buffer2 = &self.descriptors[0] as *const _ as u32;
-            } else {
-                self.descriptors[i].basic.buffer2 = &self.descriptors[i + 1] as *const _ as u32;
-            }
+            desc.basic.set_own();
+        }
+
+        self.head.store(0, Ordering::Relaxed);
+        self.tail.store(0, Ordering::Relaxed);
+        for addr in self.buffers.iter_mut() {
+            *addr = core::ptr::null_mut();
         }
 
         Ok(())
@@ -178,12 +194,111 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     pub fn get_descriptor_address(&self, index: usize) -> u32 {
         &self.descriptors[index] as *const _ as u32
     }
+
+    pub fn head(&self) -> usize {
+        self.head.load(Ordering::Acquire) % N
+    }
+
+    pub fn tail(&self) -> usize {
+        self.tail.load(Ordering::Acquire) % N
+    }
+
+    pub fn next_head(&self) -> usize {
+        (self.head.load(Ordering::Acquire) + 1) % N
+    }
+
+    pub fn advance_head(&self) {
+        self.head.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn get_next_tx_descriptor(&self) -> Option<&DmaExtendedDescriptor> {
+        let head = self.head();
+        let tail = self.tail();
+        let next = self.next_head();
+
+        if next == tail {
+            return None;
+        }
+
+        let current = &self.descriptors[head];
+        if current.basic.is_owned_by_dma() {
+            return None;
+        }
+
+        Some(&self.descriptors[next])
+    }
+
+    pub fn get_next_tx_descriptor_mut(&mut self) -> Option<&mut DmaExtendedDescriptor> {
+        let head = self.head();
+        let tail = self.tail();
+        let next = self.next_head();
+
+        if next == tail {
+            return None;
+        }
+
+        let current = &self.descriptors[head];
+        if current.basic.is_owned_by_dma() {
+            return None;
+        }
+
+        Some(&mut self.descriptors[next])
+    }
+
+    pub fn get_completed_rx_descriptor(&self) -> Option<(usize, &DmaExtendedDescriptor)> {
+        let desc = &self.descriptors[self.tail()];
+
+        if desc.basic.is_owned_by_dma() {
+            return None;
+        }
+
+        let packet_len = (desc.basic.des3() & 0x7fff) as usize;
+        Some((packet_len, desc))
+    }
+
+    pub fn advance_rx_tail(&self) {
+        self.tail.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn reclaim_tx_descriptors(&mut self) -> usize {
+        let mut reclaimed = 0;
+        let tail = self.tail();
+        let head = self.head();
+
+        let mut current = tail;
+        while current != head {
+            let desc = &mut self.descriptors[current];
+            if desc.basic.is_owned_by_dma() {
+                break;
+            }
+
+            desc.basic.clear_own();
+            if !self.buffers[current].is_null() {
+                let paddr = self.buffers[current] as usize;
+                unsafe {
+                    let vaddr = H::mmio_phys_to_virt(paddr, self.buffer_size);
+                    H::dma_dealloc(paddr, vaddr, self.buffer_size);
+                }
+                self.buffers[current] = core::ptr::null_mut();
+            }
+
+            current = (current + 1) % N;
+            reclaimed += 1;
+        }
+
+        if reclaimed > 0 {
+            self.tail.fetch_add(reclaimed, Ordering::Release);
+        }
+
+        reclaimed
+    }
 }
 
 /// Simple DWMAC network interface
 pub struct DwmacNic<H: DwmacHal> {
     base_addr: NonNull<u8>,
     mac_addr: [u8; 6],
+    link_up: AtomicBool,
 
     tx_ring: DescriptorRing<TX_DESC_COUNT, H>,
     tx_dirty: AtomicUsize,
@@ -206,6 +321,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         let mut nic = Self {
             base_addr,
             mac_addr: [0x02, 0x03, 0x04, 0x05, 0x06, 0x07], // Default MAC
+            link_up: AtomicBool::new(true),
 
             tx_ring: DescriptorRing::<TX_DESC_COUNT, H>::new(MAX_FRAME_SIZE),
             tx_dirty: AtomicUsize::new(0),
@@ -275,7 +391,10 @@ impl<H: DwmacHal> DwmacNic<H> {
             }
         }
 
-        self.write_reg(regs::mac::INTERRUPT_ENABLE, regs::mac::INT_DEFAULT_ENABLE);
+        self.write_reg(
+            regs::mac::INTERRUPT_ENABLE,
+            regs::mac::INT_DEFAULT_ENABLE | regs::mac::MacInterruptEnable::RGMII.bits(),
+        );
         let interrupt_enable = self.read_reg(regs::mac::INTERRUPT_ENABLE);
         log::debug!("   🔍 Interrupt enable: {:#x}", interrupt_enable);
 
@@ -533,24 +652,19 @@ impl<H: DwmacHal> DwmacNic<H> {
         }
     }
 
-    fn tx_current(&self) -> usize {
-        self.tx_ring.current_index.load(Ordering::Acquire) % TX_DESC_COUNT
+    /// 写入TX DMA轮询请求寄存器
+    fn start_tx_dma(&self) {
+        self.write_reg(regs::dma::TX_POLL_DEMAND, 1);
     }
 
-    fn rx_current(&self) -> usize {
-        self.rx_ring.current_index.load(Ordering::Acquire) % RX_DESC_COUNT
-    }
-
-    fn tx_dirty(&self) -> usize {
-        self.tx_dirty.load(Ordering::Acquire) % TX_DESC_COUNT
-    }
-
-    fn reset_rx_descriptor(&mut self, desc_index: usize) -> Result<(), DevError> {
-        let desc = &mut self.rx_ring.descriptors[desc_index];
-        let status = desc.basic.status();
-        desc.basic.set_status(status | DESC_OWN);
-        Ok(())
-    }
+    // fn update_link_status(&self) {
+    //     let status = self.read_reg(regs::mac::INTERRUPT_STATUS);
+    //     if status & regs::mac::MacInterruptStatus::LINK_UP.bits() != 0 {
+    //         self.link_up.store(true, Ordering::Release);
+    //     } else {
+    //         self.link_up.store(false, Ordering::Release);
+    //     }
+    // }
 }
 
 // Implement network driver traits
@@ -570,17 +684,11 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn can_transmit(&self) -> bool {
-        log::trace!("can_transmit");
-        let current_desc = self.tx_ring.descriptors[self.tx_current()];
-        let status = current_desc.basic.status();
-        (status & regs::dma::DESC_OWN) == 0
+        self.link_up.load(Ordering::Acquire) && self.tx_ring.get_next_tx_descriptor().is_some()
     }
 
     fn can_receive(&self) -> bool {
-        log::trace!("can_receive");
-        let current_desc = self.rx_ring.descriptors[self.rx_current()];
-        let status = current_desc.basic.status();
-        (status & regs::dma::DESC_OWN) == 0 && (status & regs::dma::DESC_LAST) != 0
+        self.link_up.load(Ordering::Acquire) && self.rx_ring.get_completed_rx_descriptor().is_some()
     }
 
     fn rx_queue_size(&self) -> usize {
@@ -592,140 +700,88 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn transmit(&mut self, tx_buf: NetBufPtr) -> DevResult {
-        log::trace!("transmit");
         if !self.can_transmit() {
             return Err(DevError::Again);
         }
 
-        let desc_index = self.tx_current();
-        let desc = &mut self.tx_ring.descriptors[desc_index];
+        let desc = self
+            .tx_ring
+            .get_next_tx_descriptor_mut()
+            .ok_or(DevError::NoMemory)?;
 
-        desc.basic.set_buffer1(tx_buf.buf_ptr.as_ptr() as u32);
-        desc.basic.set_control(tx_buf.len as u32);
-        desc.basic
-            .set_status(TX_FIRST_SEGMENT | TX_LAST_SEGMENT | TX_INTERRUPT_COMPLETE | DESC_OWN);
+        desc.basic.set_des0(tx_buf.raw_ptr::<u8>() as u32);
+        desc.basic.set_des1(0);
+        desc.basic.set_des2(tx_buf.packet_len() as u32);
+        desc.basic.set_des3(
+            regs::dma::TDES3::FIRST_DESCRIPTOR.bits() | regs::dma::TDES3::LAST_DESCRIPTOR.bits(),
+        );
+        desc.basic.set_own();
 
-        self.tx_ring.current_index.fetch_add(1, Ordering::Release);
+        self.tx_ring.buffers[self.tx_ring.head()] = tx_buf.raw_ptr() as *mut u8;
 
-        let next_desc_index = self.tx_current();
-        let next_desc_addr = self.tx_ring.get_descriptor_address(next_desc_index);
+        self.tx_ring.advance_head();
+        self.tx_dirty.fetch_add(1, Ordering::AcqRel);
 
-        self.write_reg(regs::dma::CHAN_TX_END_ADDR, next_desc_addr);
+        self.start_tx_dma();
 
-        log::trace!("Packet transmitted, TX index: {}", desc_index);
+        log::trace!("Packet transmitted, TX index: {}", self.tx_ring.head());
 
         Ok(())
     }
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
-        log::trace!("receive");
         if !self.can_receive() {
             return Err(DevError::Again);
         }
 
-        let desc_index = self.rx_current();
-        let desc = &mut self.rx_ring.descriptors[desc_index];
+        let (packet_len, desc) = self
+            .rx_ring
+            .get_completed_rx_descriptor()
+            .ok_or(DevError::Again)?;
 
-        let status = desc.basic.status();
-
-        if (status & RX_ERROR_SUMMARY) != 0 {
-            self.reset_rx_descriptor(desc_index)?;
-            log::trace!("RX descriptor reset, RX index: {}", desc_index);
-            return Err(DevError::Again);
+        if (desc.basic.des3() & RDES3::ERROR_SUMMARY.bits()) != 0 {
+            return Err(DevError::BadState);
         }
 
-        let frame_len = ((status & RX_FRAME_LENGTH_MASK) >> RX_FRAME_LENGTH_SHIFT) as usize;
-
-        if frame_len < 64 || frame_len > 1518 {
-            self.reset_rx_descriptor(desc_index)?;
-            log::trace!(
-                "RX frame length({}) invalid, RX index: {}",
-                frame_len,
-                desc_index
-            );
-            return Err(DevError::Again);
-        }
-
-        let buffer_addr = desc.basic.buffer1();
-
+        let buffer_ptr = self.rx_ring.buffers[self.rx_ring.tail()];
         let net_buf = NetBufPtr::new(
-            NonNull::new(buffer_addr as *mut u8).unwrap(),
-            NonNull::new(buffer_addr as *mut u8).unwrap(),
-            frame_len - 4,
+            NonNull::new(buffer_ptr).unwrap(),
+            NonNull::new(buffer_ptr).unwrap(),
+            packet_len,
         );
 
-        self.rx_ring.current_index.fetch_add(1, Ordering::Release);
+        self.rx_ring.advance_rx_tail();
 
         log::trace!(
             "Packet received, length: {}, RX index: {}",
-            frame_len,
-            desc_index
+            packet_len,
+            self.rx_ring.tail()
         );
 
         Ok(net_buf)
     }
 
     fn recycle_rx_buffer(&mut self, rx_buf: NetBufPtr) -> DevResult {
-        let buffer_addr = rx_buf.buf_ptr.as_ptr() as u32;
-        let mut desc_index = None;
+        let tail = self.rx_ring.tail();
+        let desc = &mut self.rx_ring.descriptors[tail];
 
-        for i in 0..RX_DESC_COUNT {
-            let desc = &self.rx_ring.descriptors[i];
-            let desc_buffer = desc.basic.buffer1();
+        desc.basic.set_des0(rx_buf.raw_ptr::<u8>() as u32);
+        desc.basic.set_des1(0);
+        desc.basic.set_des2(0);
+        desc.basic
+            .set_des3(RDES3::BUFFER1_VALID_ADDR.bits() | RDES3::INT_ON_COMPLETION_EN.bits());
+        desc.basic.set_own();
 
-            if desc_buffer == buffer_addr {
-                desc_index = Some(i);
-                break;
-            }
-        }
+        self.rx_ring.buffers[tail] = rx_buf.raw_ptr() as *mut u8;
+        self.rx_ring.advance_rx_tail();
+        log::trace!("RX buffer recycled, RX index: {}", tail);
 
-        let Some(index) = desc_index else {
-            log::trace!(
-                "RX buffer not found, RX index: {}",
-                desc_index.unwrap_or(usize::MAX)
-            );
-            return Err(DevError::BadState);
-        };
-
-        let desc = &mut self.rx_ring.descriptors[index];
-
-        desc.basic.set_status(DESC_OWN);
-        desc.basic.set_control(MAX_FRAME_SIZE as u32);
-
-        self.write_reg(CHAN_RX_END_ADDR, self.rx_ring.get_descriptor_address(index));
-
-        log::trace!("RX buffer recycled, RX index: {}", index);
         Ok(())
     }
 
     fn recycle_tx_buffers(&mut self) -> DevResult {
-        let mut recycles = 0;
-
-        while self.tx_dirty() != self.tx_current() {
-            let dirty_index = self.tx_dirty();
-            let dirty_desc = &mut self.tx_ring.descriptors[dirty_index];
-            let status = dirty_desc.basic.status();
-
-            if (status & DESC_OWN) != 0 {
-                break;
-            }
-
-            if (status & TX_ERROR_SUMMARY) != 0 {
-                log::trace!("TX error summary, TX index: {}", dirty_index);
-            }
-
-            dirty_desc.basic.set_status(0);
-            dirty_desc.basic.set_control(0);
-            dirty_desc.basic.set_buffer1(0);
-
-            self.tx_dirty.fetch_add(1, Ordering::Release);
-            recycles += 1;
-        }
-
-        if recycles > 0 {
-            log::trace!("TX buffers recycled, recycles: {}", recycles);
-        }
-
+        let reclaimed = self.tx_ring.reclaim_tx_descriptors();
+        self.tx_dirty.fetch_sub(reclaimed, Ordering::Release);
         Ok(())
     }
 

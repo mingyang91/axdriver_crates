@@ -304,19 +304,43 @@ pub mod dma {
     pub const DESC_FIRST: u32 = 1 << 28;
     pub const DESC_LAST: u32 = 1 << 29;
 
-    // TX描述符状态位（TDES0）
-    pub const TX_FIRST_SEGMENT: u32 = 1 << 28; // 第一段[9]
-    pub const TX_LAST_SEGMENT: u32 = 1 << 29; // 最后一段[9]
-    pub const TX_INTERRUPT_COMPLETE: u32 = 1 << 30; // 完成中断[9]
-    pub const TX_ERROR_SUMMARY: u32 = 1 << 15; // 错误总结位
+    // /* RDES3 (write back format) */
+    // #define RDES3_PACKET_SIZE_MASK		GENMASK(14, 0)
+    // #define RDES3_ERROR_SUMMARY		BIT(15)
+    // #define RDES3_PACKET_LEN_TYPE_MASK	GENMASK(18, 16)
+    // #define RDES3_DRIBBLE_ERROR		BIT(19)
+    // #define RDES3_RECEIVE_ERROR		BIT(20)
+    // #define RDES3_OVERFLOW_ERROR		BIT(21)
+    // #define RDES3_RECEIVE_WATCHDOG		BIT(22)
+    // #define RDES3_GIANT_PACKET		BIT(23)
+    // #define RDES3_CRC_ERROR			BIT(24)
+    // #define RDES3_RDES0_VALID		BIT(25)
+    // #define RDES3_RDES1_VALID		BIT(26)
+    // #define RDES3_RDES2_VALID		BIT(27)
+    // #define RDES3_LAST_DESCRIPTOR		BIT(28)
+    // #define RDES3_FIRST_DESCRIPTOR		BIT(29)
+    // #define RDES3_CONTEXT_DESCRIPTOR	BIT(30)
+    // #define RDES3_CONTEXT_DESCRIPTOR_SHIFT	30
 
-    // RX描述符状态位（RDES0）
-    pub const RX_FIRST_DESCRIPTOR: u32 = 1 << 9; // 第一个描述符[23]
-    pub const RX_LAST_DESCRIPTOR: u32 = 1 << 8; // 最后一个描述符[23]
-    pub const RX_ERROR_SUMMARY: u32 = 1 << 15; // 错误总结位[23]
-    pub const RX_DESCRIPTOR_ERROR: u32 = 1 << 14; // 描述符错误[23]
-    pub const RX_FRAME_LENGTH_MASK: u32 = 0x3FFF0000; // 帧长度字段[23]
-    pub const RX_FRAME_LENGTH_SHIFT: u32 = 16; // 帧长度位移[23]
+    // /* RDES3 (read format) */
+    // #define RDES3_BUFFER1_VALID_ADDR	BIT(24)
+    // #define RDES3_BUFFER2_VALID_ADDR	BIT(25)
+    // #define RDES3_INT_ON_COMPLETION_EN	BIT(30)
+    bitflags! {
+        pub struct RDES3: u32 {
+            const BUFFER1_VALID_ADDR = 1 << 24;
+            const BUFFER2_VALID_ADDR = 1 << 25;
+            const INT_ON_COMPLETION_EN = 1 << 30;
+            const ERROR_SUMMARY = 1 << 15;
+        }
+    }
+
+    bitflags! {
+        pub struct TDES3: u32 {
+            const FIRST_DESCRIPTOR = 1 << 29;
+            const LAST_DESCRIPTOR = 1 << 28;
+        }
+    }
 
     pub const GMAC_Q0_TX_FLOW_CTRL: usize = 0x0070;
     pub const GMAC_Q0_TX_FLOW_CTRL_TFE: u32 = 0xffff_0002;
