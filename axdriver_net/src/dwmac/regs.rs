@@ -274,9 +274,9 @@ pub mod dma {
     pub const CHAN_BASE_ADDR: usize = 0x1100;
     pub const CHAN_TX_CTRL: usize = CHAN_BASE_ADDR + 0x04;
     pub const CHAN_RX_CTRL: usize = CHAN_BASE_ADDR + 0x08;
-    pub const CHAN_TX_BASE_ADDR_HI: usize = CHAN_TX_BASE_ADDR + 0x10;
+    pub const CHAN_TX_BASE_ADDR_HI: usize = CHAN_BASE_ADDR + 0x10;
     pub const CHAN_TX_BASE_ADDR: usize = CHAN_BASE_ADDR + 0x14;
-    pub const CHAN_RX_BASE_ADDR_HI: usize = CHAN_RX_BASE_ADDR + 0x18;
+    pub const CHAN_RX_BASE_ADDR_HI: usize = CHAN_BASE_ADDR + 0x18;
     pub const CHAN_RX_BASE_ADDR: usize = CHAN_BASE_ADDR + 0x1c;
     pub const CHAN_TX_END_ADDR: usize = CHAN_BASE_ADDR + 0x20;
     pub const CHAN_RX_END_ADDR: usize = CHAN_BASE_ADDR + 0x28;
