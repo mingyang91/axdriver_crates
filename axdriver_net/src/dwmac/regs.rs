@@ -234,16 +234,16 @@ pub mod mac {
         }
     }
 
-    pub const CONFIG_DEFAULT: u32 = MacConfig::SWR.bits()
-        | MacConfig::SARC.bits()
-        | MacConfig::TWOKPEN.bits()
-        | MacConfig::CST.bits()
-        | MacConfig::TC.bits()
-        | MacConfig::WD.bits()
-        | MacConfig::JD.bits()
-        | MacConfig::DM.bits()
-        | MacConfig::TE.bits()
-        | MacConfig::RE.bits();
+    pub const CONFIG_DEFAULT: u32 = // MacConfig::SWR.bits()
+        MacConfig::SARC.bits()
+            | MacConfig::TWOKPEN.bits()
+            | MacConfig::CST.bits()
+            | MacConfig::TC.bits()
+            | MacConfig::WD.bits()
+            | MacConfig::JD.bits()
+            | MacConfig::DM.bits()
+            | MacConfig::TE.bits()
+            | MacConfig::RE.bits();
 
     /// 0x78200 = 0b1111000001000000000
     pub const CONFIG_2: u32 = MacConfig::CST.bits()

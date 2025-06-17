@@ -6,7 +6,9 @@
 
 mod mdio;
 mod regs;
-use crate::dwmac::mdio::{Yt8531cPhy, YT8531C_BMSR, YT8531C_EXT_CHIP_CONFIG};
+use crate::dwmac::mdio::{
+    Yt8531cPhy, YT8531C_BMSR, YT8531C_EXT_CHIP_CONFIG, YT8531C_EXT_RGMII_CONFIG1,
+};
 use crate::dwmac::regs::dma::{BUS_MODE, DESC_OWN, RDES3};
 use crate::dwmac::regs::mtl;
 use crate::{EthernetAddress, NetBufPtr, NetDriverOps};
@@ -410,12 +412,12 @@ impl<H: DwmacHal> DwmacNic<H> {
         }
 
         nic.reset_dma()?;
-        // nic.init_mtl()?;
+        nic.init_mtl()?;
         nic.setup_descriptor_rings()?;
         nic.start_dma()?;
         nic.enable_dma_interrupts()?;
         nic.setup_mac_address();
-        // nic.set_qos()?;
+        nic.set_qos()?;
         nic.start_mac()?;
 
         nic.inspect_reg("MAC version", regs::mac::VERSION);
@@ -641,7 +643,7 @@ impl<H: DwmacHal> DwmacNic<H> {
 
         // setbits_le32(&eqos->mtl_regs->rxq0_operation_mode,
         //     EQOS_MTL_RXQ0_OPERATION_MODE_RSF);
-        self.set_bits(mtl::RXQ0_OPERATION_MODE, 1 << 5);
+        self.set_bits(mtl::RXQ0_OPERATION_MODE, 1 << 5 | (64 << 16) | (32 << 8));
         self.inspect_reg("MTL RXQ0_OPERATION_MODE", regs::mtl::RXQ0_OPERATION_MODE);
 
         Ok(())
@@ -675,7 +677,17 @@ impl<H: DwmacHal> DwmacNic<H> {
         })?;
         log::info!("🔍 PHY EXT_CHIP_CONFIG: {:#x}", config);
 
-        log::error!("Not implemented");
+        phy.write_ext_reg(YT8531C_EXT_RGMII_CONFIG1, 0x850) // Magic number
+            .map_err(|e| {
+                log::warn!("⚠️  PHY not responding: {:?}", e);
+                "PHY not responding"
+            })?;
+
+        log::info!(
+            "🔍 PHY EXT_RGMII_CONFIG1: {:#x}",
+            phy.read_ext_reg(YT8531C_EXT_RGMII_CONFIG1).unwrap()
+        );
+
         Ok(())
     }
 

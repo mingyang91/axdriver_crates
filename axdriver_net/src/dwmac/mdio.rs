@@ -28,6 +28,7 @@ pub const REG_DEBUG_DATA: u16 = 0x1f; // 扩展寄存器数据寄存器
 pub const YT8531C_EXT_SLEEP_CONTROL1: u16 = 0x0027;
 pub const YT8531C_EXT_CLK_OUTPUT: u16 = 0xa001;
 pub const YT8531C_EXT_CHIP_CONFIG: u16 = 0xa001;
+pub const YT8531C_EXT_RGMII_CONFIG1: u16 = 0xa003;
 pub const YT8531C_EXT_SYNCE_CFG: u16 = 0xa012;
 
 #[derive(Debug)]
