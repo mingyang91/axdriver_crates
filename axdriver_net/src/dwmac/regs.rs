@@ -297,8 +297,6 @@ pub mod dma {
 
     pub const CHAN_INTR_ENABLE: usize = CHAN_BASE_ADDR + 0x34;
 
-    pub const TX_POLL_DEMAND: usize = 0x1004;
-    pub const RX_POLL_DEMAND: usize = 0x1008;
     pub const STATUS: usize = 0x1014;
     pub const OPERATION_MODE: usize = 0x1018;
 

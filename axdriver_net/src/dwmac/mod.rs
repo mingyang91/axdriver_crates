@@ -415,7 +415,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         nic.init_mtl()?;
         nic.setup_descriptor_rings()?;
         nic.start_dma()?;
-        nic.enable_dma_interrupts()?;
+        // nic.enable_dma_interrupts()?;
         nic.setup_mac_address();
         nic.set_qos()?;
         nic.start_mac()?;
@@ -596,11 +596,11 @@ impl<H: DwmacHal> DwmacNic<H> {
 
         self.inspect_reg("MAC VERSION", regs::mac::VERSION);
 
-        self.write_reg(
-            regs::mac::FRAME_FILTER,
-            regs::mac::PacketFilter::PR.bits() | regs::mac::PacketFilter::PM.bits(),
-        );
-        self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
+        // self.write_reg(
+        //     regs::mac::FRAME_FILTER,
+        //     regs::mac::PacketFilter::PR.bits() | regs::mac::PacketFilter::PM.bits(),
+        // );
+        // self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
 
         Ok(())
     }
@@ -728,7 +728,11 @@ impl<H: DwmacHal> DwmacNic<H> {
 
     /// 写入TX DMA轮询请求寄存器
     fn start_tx_dma(&self) {
-        self.set_bits(regs::dma::TX_POLL_DEMAND, 1);
+        self.set_bits(regs::dma::CHAN_TX_CTRL, 1);
+    }
+
+    fn start_rx_dma(&self) {
+        self.set_bits(regs::dma::CHAN_RX_CTRL, 1);
     }
 
     // fn update_link_status(&self) {
@@ -762,6 +766,11 @@ impl<H: DwmacHal> DwmacNic<H> {
         self.inspect_reg("DMA_DEBUG_STATUS1", 0x1004);
         self.inspect_reg("DMA_DEBUG_STATUS2", 0x1008);
         self.inspect_reg("DMA_INTR_STATUS", 0x1100 + 0x60);
+        let dma_intr_status = self.read_reg(0x1100 + 0x60);
+        if dma_intr_status != 0 {
+            log::info!("DMA_INTR_STATUS: {:#x}", dma_intr_status);
+            self.write_reg(0x1100 + 0x60, dma_intr_status);
+        }
         let dma_chan0_debug_status = self.read_reg(0x1100 + 0x64);
         let tx_fsm = dma_chan0_debug_status & 0x7;
         let rx_fsm = (dma_chan0_debug_status >> 16) & 0x7;
@@ -863,6 +872,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
         self.inspect_dma_regs();
         self.inspect_mtl_regs();
         self.scan_rx_ring();
+        self.start_rx_dma();
         if !self.can_receive() {
             return Err(DevError::Again);
         }
