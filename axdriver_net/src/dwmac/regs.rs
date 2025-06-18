@@ -264,6 +264,14 @@ pub mod mac {
             const RA = 1 << 31;
         }
     }
+
+    pub const PACKET_FILTER_ALL: u32 = PacketFilter::PR.bits()
+        | PacketFilter::PM.bits()
+        | PacketFilter::PCF.bits()
+        | PacketFilter::HPF.bits()
+        | PacketFilter::VTFE.bits()
+        | PacketFilter::IPFE.bits()
+        | PacketFilter::RA.bits();
 }
 
 /// MTL registers
@@ -282,7 +290,10 @@ pub mod dma {
 
     pub const BUS_MODE: usize = 0x1000;
     pub const SYS_BUS_MODE: usize = 0x1004;
-    pub const INTR_STATUS: usize = 0x1008;
+    pub const DMA_STATUS: usize = 0x1008;
+    pub const DMA_DEBUG_STATUS0: usize = 0x100c;
+    pub const DMA_DEBUG_STATUS1: usize = 0x1010;
+    pub const DMA_DEBUG_STATUS2: usize = 0x1014;
     pub const CHAN_BASE_ADDR: usize = 0x1100;
     pub const CHAN_TX_CTRL: usize = CHAN_BASE_ADDR + 0x04;
     pub const CHAN_RX_CTRL: usize = CHAN_BASE_ADDR + 0x08;
@@ -296,6 +307,9 @@ pub mod dma {
     pub const CHAN_RX_RING_LEN: usize = CHAN_BASE_ADDR + 0x30;
 
     pub const CHAN_INTR_ENABLE: usize = CHAN_BASE_ADDR + 0x34;
+    pub const CHAN_CUR_TX_DESC: usize = CHAN_BASE_ADDR + 0x44;
+    pub const CHAN_CUR_RX_DESC: usize = CHAN_BASE_ADDR + 0x4c;
+    pub const CHAN_STATUS: usize = CHAN_BASE_ADDR + 0x60;
 
     pub const STATUS: usize = 0x1014;
     pub const OPERATION_MODE: usize = 0x1018;

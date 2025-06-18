@@ -21,6 +21,7 @@ pub const YT8531C_PHYID1: u16 = 0x02; // PHY Identifier 1
 pub const YT8531C_PHYID2: u16 = 0x03; // PHY Identifier 2
 
 // YT8531C扩展寄存器访问
+pub const YT8531C_CLOCK_GATING_REG: u16 = 0xc;
 pub const REG_DEBUG_ADDR_OFFSET: u16 = 0x1e; // 扩展寄存器地址寄存器
 pub const REG_DEBUG_DATA: u16 = 0x1f; // 扩展寄存器数据寄存器
 
@@ -29,7 +30,14 @@ pub const YT8531C_EXT_SLEEP_CONTROL1: u16 = 0x0027;
 pub const YT8531C_EXT_CLK_OUTPUT: u16 = 0xa001;
 pub const YT8531C_EXT_CHIP_CONFIG: u16 = 0xa001;
 pub const YT8531C_EXT_RGMII_CONFIG1: u16 = 0xa003;
+pub const YT8531C_EXT_CLK_TX_INVERT: u16 = 0xa010;
 pub const YT8531C_EXT_SYNCE_CFG: u16 = 0xa012;
+
+// 延迟配置位定义
+const YT8531_CCR_RXC_DLY_EN: u16 = 1 << 8; // RX时钟延迟使能
+const YT8531_RC1R_RX_DELAY_MASK: u16 = 0xF000;
+const YT8531_RC1R_GE_TX_DELAY_MASK: u16 = 0x0F00;
+const YT8531_CGR_RX_CLK_EN: u16 = 1 << 12;
 
 #[derive(Debug)]
 pub enum MdioError {
@@ -212,5 +220,97 @@ impl<H: super::DwmacHal> Yt8531cPhy<H> {
         }
 
         Err(MdioError::Timeout)
+    }
+
+    pub fn configure_rgmii_id(&mut self) -> Result<()> {
+        log::info!("🔧 Configuring YT8531 RGMII-ID mode...");
+
+        // 1. 配置RGMII延迟参数
+        self.configure_rgmii_delays()?;
+
+        // 2. 配置Motorcomm特定功能
+        self.configure_motorcomm_features()?;
+
+        // 3. 启用RX时钟门控
+        self.enable_rx_clock_gating()?;
+
+        log::info!("✅ RGMII-ID configuration completed");
+        Ok(())
+    }
+
+    fn configure_rgmii_delays(&self) -> Result<()> {
+        // VisionFive2 v1.3b推荐延迟值
+        let rx_delay_ps = 1900u32; // RX延迟1900ps
+        let tx_delay_ps = 1350u32; // TX延迟1350ps
+
+        // 查找延迟值对应的寄存器值
+        let rx_reg_val = 0xd; // 默认1900ps对应0xD
+
+        let tx_reg_val = 0x9; // 默认1350ps对应0x9
+
+        // 读取当前配置
+        let mut config_reg = self.read_ext_reg(YT8531C_EXT_CHIP_CONFIG)?;
+        let mut rgmii_reg = self.read_ext_reg(YT8531C_EXT_RGMII_CONFIG1)?;
+
+        // 配置RX延迟
+        config_reg |= YT8531_CCR_RXC_DLY_EN; // 启用RX延迟
+        rgmii_reg &= !YT8531_RC1R_RX_DELAY_MASK;
+        rgmii_reg |= (rx_reg_val << 12) & YT8531_RC1R_RX_DELAY_MASK;
+
+        // 配置TX延迟
+        rgmii_reg &= !YT8531_RC1R_GE_TX_DELAY_MASK;
+        rgmii_reg |= (tx_reg_val << 8) & YT8531_RC1R_GE_TX_DELAY_MASK;
+
+        // 写回寄存器
+        self.write_ext_reg(YT8531C_EXT_CHIP_CONFIG, config_reg)?;
+        self.write_ext_reg(YT8531C_EXT_RGMII_CONFIG1, rgmii_reg)?;
+
+        log::info!(
+            "   📊 RX delay: {}ps (reg: 0x{:X})",
+            rx_delay_ps,
+            rx_reg_val
+        );
+        log::info!(
+            "   📊 TX delay: {}ps (reg: 0x{:X})",
+            tx_delay_ps,
+            tx_reg_val
+        );
+
+        Ok(())
+    }
+
+    fn configure_motorcomm_features(&self) -> Result<()> {
+        // 配置Motorcomm YT8531特定功能[2]
+        // 这些配置对应Linux设备树中的motorcomm属性
+
+        // 启用TX时钟调整
+        // 对应 motorcomm,tx-clk-adj-enabled
+        let mut ext_reg = self.read_ext_reg(YT8531C_EXT_SYNCE_CFG)?;
+        ext_reg |= 1 << 8; // 启用TX时钟调整
+        self.write_ext_reg(YT8531C_EXT_SYNCE_CFG, ext_reg)?;
+
+        // 配置100M TX时钟反转
+        // 对应 motorcomm,tx-clk-100-inverted
+        let mut clk_config = self.read_ext_reg(YT8531C_EXT_CLK_TX_INVERT)?;
+        clk_config |= 1 << 4; // 100M TX时钟反转
+        self.write_ext_reg(YT8531C_EXT_CLK_TX_INVERT, clk_config)?;
+
+        // 配置1000M TX时钟反转
+        // 对应 motorcomm,tx-clk-1000-inverted
+        clk_config |= 1 << 5; // 1000M TX时钟反转
+        self.write_ext_reg(YT8531C_EXT_CLK_TX_INVERT, clk_config)?;
+
+        log::info!("   🔧 Motorcomm specific features configured");
+        Ok(())
+    }
+
+    fn enable_rx_clock_gating(&mut self) -> Result<()> {
+        // 启用RX时钟门控以节省功耗[10]
+        let mut clock_gating = self.read_ext_reg(YT8531C_EXT_CLK_OUTPUT)?;
+        clock_gating |= YT8531_CGR_RX_CLK_EN;
+        self.write_ext_reg(YT8531C_CLOCK_GATING_REG, clock_gating)?;
+
+        log::info!("   ⚡ RX clock gating enabled");
+        Ok(())
     }
 }
