@@ -315,3 +315,9 @@ A working implementation should:
 - ✅ **Handle errors gracefully** - Timeout and recovery
 
 This tutorial provides a solid foundation for understanding ethernet driver development! 
+
+```
+# uEnv.txt
+loadkernel=fatload mmc 1:3 0x40200000 arceos-starfive.bin
+bootcmd=run loadkernel; go 0x40200000
+```

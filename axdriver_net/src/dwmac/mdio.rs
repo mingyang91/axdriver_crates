@@ -1,3 +1,37 @@
+/// dump from linux
+/// phytool read eth1/1/0xa000
+/// 0x1140
+/// phytool read eth1/1/0xa001
+/// 0x7960
+/// phytool read eth1/1/0xa002
+/// 0x4f51
+/// phytool read eth1/1/0xa003
+/// 0xe91b
+/// phytool read eth1/1/0xa004
+/// 0x1de1
+/// phytool read eth1/1/0xa005
+/// 0xc5e1
+/// phytool read eth1/1/0xa006
+/// 0x000d
+/// phytool read eth1/1/0xa007
+/// 0x2801
+/// phytool read eth1/1/0xa008
+/// 0x0000
+/// phytool read eth1/1/0xa009
+/// 0x0300
+/// phytool read eth1/1/0xa00a
+/// 0x3800
+/// phytool read eth1/1/0xa00b
+/// 0x0000
+/// phytool read eth1/1/0xa00c
+/// 0x0000
+/// phytool read eth1/1/0xa00d
+/// 0x4007
+/// phytool read eth1/1/0xa00e
+/// 0x0000
+/// phytool read eth1/1/0xa00f
+/// 0x2000
+
 // EQOS MAC MDIO寄存器偏移
 pub const MAC_MDIO_ADDRESS_OFFSET: usize = 0x200;
 pub const MAC_MDIO_DATA_OFFSET: usize = 0x204;

@@ -99,16 +99,18 @@ impl DmaDescriptor {
     }
 
     fn set_des3(&mut self, des3: u32) {
-        unsafe { write_volatile(&mut self.des3, des3) };
+        mb();
+        unsafe {
+            write_volatile(&mut self.des3, self.des3() & !DESC_OWN);
+            mb();
+            write_volatile(&mut self.des3, des3)
+        };
+        mb();
     }
 
     /// Set the descriptor as owned by DMA hardware
     pub fn set_own(&mut self) {
-        mb();
-        unsafe {
-            write_volatile(&mut self.des3, self.des3() | DESC_OWN);
-        }
-        mb();
+        self.set_des3(self.des3() | DESC_OWN);
     }
 
     /// Clear the DMA ownership bit
@@ -163,8 +165,9 @@ impl<H: DwmacHal> DmaExtendedDescriptor<H> {
     }
 
     pub fn set_buffer_paddr(&mut self, addr: PhysAddr) {
-        self.basic.des0 = addr as u32;
-        self.basic.des1 = (addr >> 32) as u32;
+        self.basic.set_des0(addr as u32);
+        self.basic.set_des1(0);
+        mb();
     }
 }
 
@@ -206,8 +209,8 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
             let (buffer_paddr, buffer_vaddr) = H::dma_alloc(self.buffer_size);
             desc.set_buffer_paddr(buffer_paddr);
             desc.basic.set_des2(self.buffer_size as u32);
-            desc.basic.set_des3(RDES3::BUFFER1_VALID_ADDR.bits());
-            desc.basic.set_own();
+            desc.basic
+                .set_des3(regs::dma::DESC_OWN | RDES3::BUFFER1_VALID_ADDR.bits());
             self.buffers[i] = buffer_vaddr.as_ptr();
         }
 
@@ -358,9 +361,8 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     pub fn recycle_rx_descriptor(&mut self, desc_index: usize) -> Result<(), &'static str> {
         let desc = &mut self.descriptors[desc_index];
 
-        desc.basic.set_des3(RDES3::BUFFER1_VALID_ADDR.bits());
-        // | RDES3::INT_ON_COMPLETION_EN.bits();
-        desc.basic.set_own();
+        desc.basic
+            .set_des3(regs::dma::DESC_OWN | RDES3::BUFFER1_VALID_ADDR.bits());
 
         Ok(())
     }
@@ -429,11 +431,13 @@ impl<H: DwmacHal> DwmacNic<H> {
 
         // Initialize hardware
         for i in 0..2 {
+            mb();
             let _ = nic.init_phy(i).inspect_err(|e| {
                 log::error!("PHY{i} initialization failed: {:?}", e);
             });
         }
 
+        mb();
         nic.reset_dma()?;
         mb();
         nic.init_mtl()?;
@@ -449,7 +453,6 @@ impl<H: DwmacHal> DwmacNic<H> {
         mb();
         nic.start_mac()?;
         mb();
-
         nic.inspect_reg("MAC version", regs::mac::VERSION);
         nic.inspect_reg("DMA STATUS", regs::dma::DMA_STATUS);
 
@@ -714,10 +717,10 @@ impl<H: DwmacHal> DwmacNic<H> {
                 "PHY not responding"
             })?;
 
-        phy.configure_rgmii_id().map_err(|e| {
-            log::warn!("⚠️  PHY not responding: {:?}", e);
-            "PHY not responding"
-        })?;
+        // phy.configure_rgmii_id().map_err(|e| {
+        //     log::warn!("⚠️  PHY not responding: {:?}", e);
+        //     "PHY not responding"
+        // })?;
 
         log::info!(
             "🔍 PHY EXT_RGMII_CONFIG1: {:#x}",
@@ -787,6 +790,13 @@ impl<H: DwmacHal> DwmacNic<H> {
 
     fn start_rx_dma(&self) {
         self.set_bits(regs::dma::CHAN_RX_CTRL, 1);
+    }
+
+    fn write_rx_tail_id(&self) {
+        self.write_reg(
+            regs::dma::CHAN_RX_END_ADDR,
+            self.rx_ring.get_descriptor_paddr(self.rx_ring.tail()) as u32,
+        );
     }
 
     // fn update_link_status(&self) {
@@ -902,11 +912,11 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
         desc.set_buffer_vaddr(tx_buf.raw_ptr::<u8>(), tx_buf.packet_len());
         desc.basic.set_des2(tx_buf.packet_len() as u32);
         desc.basic.set_des3(
-            regs::dma::TDES3::FIRST_DESCRIPTOR.bits()
+            regs::dma::DESC_OWN
+                | regs::dma::TDES3::FIRST_DESCRIPTOR.bits()
                 | regs::dma::TDES3::LAST_DESCRIPTOR.bits()
                 | (tx_buf.packet_len() as u32),
         );
-        desc.basic.set_own();
 
         self.tx_ring.buffers[self.tx_ring.head()] = tx_buf.raw_ptr() as *mut u8;
 
@@ -921,10 +931,12 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
-        // self.inspect_dma_regs();
-        // self.inspect_mtl_regs();
+        self.inspect_dma_regs();
+        self.inspect_mtl_regs();
         self.scan_rx_ring();
         if !self.can_receive() {
+            self.start_rx_dma();
+            self.write_rx_tail_id();
             return Err(DevError::Again);
         }
 
@@ -957,10 +969,10 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
         desc.set_buffer_vaddr(rx_buf.raw_ptr::<u8>(), self.rx_ring.buffer_size);
         desc.basic.set_des2(self.rx_ring.buffer_size as u32);
         desc.basic.set_des3(
-            RDES3::BUFFER1_VALID_ADDR.bits(),
+            regs::dma::DESC_OWN | RDES3::BUFFER1_VALID_ADDR.bits(),
             // | RDES3::INT_ON_COMPLETION_EN.bits(),
         );
-        desc.basic.set_own();
+        // desc.basic.set_own();
 
         self.rx_ring.buffers[recycle_index] = rx_buf.raw_ptr() as *mut u8;
         self.rx_ring.advance_recycle_index();
