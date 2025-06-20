@@ -321,3 +321,16 @@ This tutorial provides a solid foundation for understanding ethernet driver deve
 loadkernel=fatload mmc 1:3 0x40200000 arceos-starfive.bin
 bootcmd=run loadkernel; go 0x40200000
 ```
+
+```
+rtt min/avg/max/mdev = 1.141/1.246/1.351/0.082 ms
+# [   87.780163] starfive-eth-plat 16040000.ethernet eth1: Link is Down
+[   90.511500] starfive-eth-plat 16040000.ethernet eth1: PHY [stmmac-1:00] driver [YT8531 Gigabit Ethernet] (irq=POLL)
+[   90.522627] starfive-eth-plat 16040000.ethernet eth1: Register MEM_TYPE_PAGE_POOL RxQ-0
+[   90.539502] dwmac4: Master AXI performs fixed burst length
+[   90.545063] starfive-eth-plat 16040000.ethernet eth1: No Safety Features support found
+[   90.553186] starfive-eth-plat 16040000.ethernet eth1: IEEE 1588-2008 Advanced Timestamp supported
+[   90.562154] starfive-eth-plat 16040000.ethernet eth1: configuring for phy/rgmii-id link mode
+[   94.742444] starfive-eth-plat 16040000.ethernet eth1: Link is Up - 1Gbps/Full - flow control rx/tx
+[   94.751628] IPv6: ADDRCONF(NETDEV_CHANGE): eth1: link becomes ready
+```

@@ -256,6 +256,21 @@ impl<H: super::DwmacHal> Yt8531cPhy<H> {
         Err(MdioError::Timeout)
     }
 
+    pub fn set_phy_linus(&self) -> Result<()> {
+        log::info!("🔧 Setting PHY to Linux configuration...");
+        self.soft_reset()?;
+        self.write_ext_reg(0xa001, 0x7960)?;
+        self.write_ext_reg(0xa003, 0xe91b)?;
+        self.write_ext_reg(0xa005, 0xc5e1)?;
+        self.write_ext_reg(0xa007, 0x2801)?;
+        self.write_ext_reg(0xa009, 0x0300)?;
+        self.write_ext_reg(0xa00b, 0x0000)?;
+        self.write_ext_reg(0xa00d, 0x4007)?;
+        self.write_ext_reg(0xa00f, 0x2000)?;
+
+        Ok(())
+    }
+
     pub fn configure_rgmii_id(&mut self) -> Result<()> {
         log::info!("🔧 Configuring YT8531 RGMII-ID mode...");
 
