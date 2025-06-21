@@ -352,6 +352,7 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
         }
 
         if reclaimed > 0 {
+            log::trace!("tx reclaimed: {}", reclaimed);
             self.tail.fetch_add(reclaimed, Ordering::Release);
         }
 
@@ -441,8 +442,6 @@ impl<H: DwmacHal> DwmacNic<H> {
         }
 
         mb();
-        nic.init_mtl()?;
-        mb();
         nic.setup_descriptor_rings()?;
         mb();
         nic.start_dma()?;
@@ -454,6 +453,9 @@ impl<H: DwmacHal> DwmacNic<H> {
         // mb();
         nic.start_mac()?;
         mb();
+        nic.init_mtl()?;
+        mb();
+
         nic.inspect_reg("MAC version", regs::mac::VERSION);
         nic.inspect_reg("DMA STATUS", regs::dma::DMA_STATUS);
 
@@ -683,7 +685,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         //     EQOS_MTL_RXQ0_OPERATION_MODE_RSF);
         self.set_bits(
             mtl::RXQ0_OPERATION_MODE,
-            1 | 1 << 5 | 1 << 7 | (64 << 16) | (32 << 8),
+            1 << 5 | 1 << 7 | (64 << 16) | (32 << 8),
         );
         self.inspect_reg("MTL RXQ0_OPERATION_MODE", regs::mtl::RXQ0_OPERATION_MODE);
 
@@ -907,6 +909,13 @@ impl<H: DwmacHal> DwmacNic<H> {
             }
         }
     }
+
+    fn clear_intr_status(&self) {
+        let status = self.read_reg(regs::dma::CHAN_STATUS);
+        if status != 0 {
+            self.write_reg(regs::dma::CHAN_STATUS, status);
+        }
+    }
 }
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -980,6 +989,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
         self.inspect_mtl_regs();
         self.scan_rx_ring();
         self.write_rx_tail_id();
+        self.clear_intr_status();
         if !self.can_receive() {
             self.start_rx_dma();
             self.write_rx_tail_id();
