@@ -807,7 +807,7 @@ impl<H: DwmacHal> DwmacNic<H> {
     /// Inspect hardware register
     fn inspect_reg(&self, name: &str, offset: usize) {
         log::trace!(
-            "    🔍 {: >width$}(0x{:0<4x}): {:#08x}",
+            "    🔍 {: >width$}(0x{:0<4x}): 0x{:0<8x}",
             name,
             offset,
             self.read_reg(offset),
@@ -916,6 +916,10 @@ impl<H: DwmacHal> DwmacNic<H> {
             self.write_reg(regs::dma::CHAN_STATUS, status);
         }
     }
+
+    fn start_dma_rx(&self) {
+        self.set_bits(regs::dma::CHAN_RX_CTRL, 1);
+    }
 }
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -988,11 +992,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
         self.inspect_dma_regs();
         self.inspect_mtl_regs();
         self.scan_rx_ring();
-        self.write_rx_tail_id();
-        self.clear_intr_status();
         if !self.can_receive() {
-            self.start_rx_dma();
-            self.write_rx_tail_id();
             return Err(DevError::Again);
         }
 
