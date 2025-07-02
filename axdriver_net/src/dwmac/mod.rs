@@ -713,11 +713,19 @@ impl<H: DwmacHal> DwmacNic<H> {
             return Err("PHY ID mismatch");
         }
 
-        let bmsr = phy.read_reg(YT8531C_BMSR).map_err(|e| {
-            log::warn!("⚠️  PHY not responding: {:?}", e);
-            "PHY not responding"
-        })?;
-        log::info!("🔍 PHY BMSR: {:#x}", bmsr);
+        for _ in 0..100 {
+            let bmsr = phy.read_reg(YT8531C_BMSR).map_err(|e| {
+                log::warn!("⚠️  PHY not responding: {:?}", e);
+                "PHY not responding"
+            })?;
+
+            if bmsr != 0x7949 {
+                // 0x796d is target value
+                log::info!("🔍 PHY BMSR: {:#x}", bmsr);
+                break;
+            }
+            H::wait_until(core::time::Duration::from_millis(10))?;
+        }
 
         let config = phy.read_ext_reg(YT8531C_EXT_CHIP_CONFIG).map_err(|e| {
             log::warn!("⚠️  PHY not responding: {:?}", e);
