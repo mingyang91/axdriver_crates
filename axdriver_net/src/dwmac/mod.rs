@@ -414,6 +414,10 @@ impl<H: DwmacHal> DwmacNic<H> {
     pub fn init(base_addr: NonNull<u8>, _size: usize) -> Result<Self, &'static str> {
         log::info!("🚀 Initializing DWMAC ethernet driver (tutorial version)");
 
+        // eqos_start(dev=00000000ff728340):
+        // jh7110_reset_trigger: deasserting reset 66 (reg=0x13020300, value=0xffe5efc8)
+        // jh7110_reset_trigger: deasserting reset 67 (reg=0x13020300, value=0xffe5efc0)
+
         // Platform-specific setup
         H::configure_platform()?;
         H::wait_until(core::time::Duration::from_millis(100))?;
@@ -433,6 +437,21 @@ impl<H: DwmacHal> DwmacNic<H> {
         mb();
         nic.reset_dma()?;
 
+        // clk_get_rate(clk=00000000ff7456e0)
+        // clk_get_rate(clk=00000000ff72c1c0)
+        // clk_get_parent_rate(clk=00000000ff72c1c0)
+        // clk_get_parent(clk=00000000ff72c1c0)
+        // debug_writel: 00000000160400dc = 0x0000007c
+
+        // TODO: u-boot have this step, but we don't have it
+
+        // eqos_mdio_read(dev=00000000ff728340, addr=0, reg=1):
+        // eqos_mdio_read: val=796d
+        // eqos_mdio_read(dev=00000000ff728340, addr=0, reg=17):
+        // eqos_mdio_read: val=7c00
+        // eqos_mdio_write(dev=00000000ff728340, addr=0, reg=30, val=a003):
+        // ytphy_modify_ext: regnum=0xa003, mask=0x4000, set=0x4000
+
         // Initialize hardware
         for i in 0..2 {
             mb();
@@ -440,6 +459,64 @@ impl<H: DwmacHal> DwmacNic<H> {
                 log::error!("PHY{i} initialization failed: {:?}", e);
             });
         }
+
+        // eqos_mdio_read(dev=00000000ff728340, addr=0, reg=31):
+        // eqos_mdio_read: val=48f0
+        // eqos_mdio_write(dev=00000000ff728340, addr=0, reg=31, val=48f0):
+
+        // eqos_adjust_link(dev=00000000ff728340):
+        // eqos_set_full_duplex(dev=00000000ff728340):
+        // eqos_set_mii_speed_100(dev=00000000ff728340):
+
+        // debug_writel: 0000000016040d18 = 0x00000010
+        // debug_writel: 0000000016040300 = 0x0000355d
+        // debug_writel: 0000000016040304 = 0x0039cf6c
+
+        // debug_writel: 0000000016041004 = 0x0002080e
+
+        // debug_writel: 0000000016041110 = 0x00000000
+        // debug_writel: 0000000016041114 = 0xff745840
+        // debug_writel: 000000001604112c = 0x00000003
+        // debug_writel: 0000000016041118 = 0x00000000
+        // debug_writel: 000000001604111c = 0xff745980
+        // debug_writel: 0000000016041130 = 0x00000003
+        // debug_writel: 0000000016041128 = 0xff745a40
+        // eqos_start: OK
+
+        // eqos_send(dev=00000000ff728340, packet=00000000ff74ae80, length=350):
+        // debug_writel: 0000000016041120 = 0xff745880
+        // eqos_recv(dev=00000000ff728340, flags=1):
+        // eqos_recv: *packetp=00000000ff746140, length=60
+        // eqos_free_pkt(packet=00000000ff746140, length=60)
+        // debug_writel: 0000000016041128 = 0xff745980
+        // eqos_recv(dev=00000000ff728340, flags=0):
+        // eqos_recv: *packetp=00000000ff746780, length=60
+        // eqos_free_pkt(packet=00000000ff746780, length=60)
+        // debug_writel: 0000000016041128 = 0xff7459c0
+        // eqos_send(dev=00000000ff728340, packet=00000000ff74ae80, length=350):
+        // debug_writel: 0000000016041120 = 0xff7458c0
+        // eqos_send(dev=00000000ff728340, packet=00000000ff74ae80, length=350):
+        // debug_writel: 0000000016041120 = 0xff745900
+        // eqos_send(dev=00000000ff728340, packet=00000000ff74ae80, length=350):
+        // debug_writel: 0000000016041120 = 0xff745840
+        // eqos_recv(dev=00000000ff728340, flags=1):
+        // eqos_recv: *packetp=00000000ff746dc0, length=342
+        // eqos_send(dev=00000000ff728340, packet=00000000ff74b4c0, length=350):
+        // debug_writel: 0000000016041120 = 0xff745880
+        // eqos_free_pkt(packet=00000000ff746dc0, length=342)
+        // debug_writel: 0000000016041128 = 0xff745a00
+        // eqos_recv(dev=00000000ff728340, flags=0):
+        // eqos_recv: *packetp=00000000ff747400, length=342
+        // eqos_send(dev=00000000ff728340, packet=00000000ff74b380, length=42):
+        // debug_writel: 0000000016041120 = 0xff7458c0
+        // eqos_free_pkt(packet=00000000ff747400, length=342)
+        // debug_writel: 0000000016041128 = 0xff745a40
+        // eqos_recv(dev=00000000ff728340, flags=0):
+        // eqos_recv: *packetp=00000000ff746140, length=62
+        // eqos_free_pkt(packet=00000000ff746140, length=62)
+        // debug_writel: 0000000016041128 = 0xff745980
+        // DHCP client bound to address 192.168.1.47 (589 ms)
+        // StarFive #
 
         mb();
         nic.setup_descriptor_rings()?;
@@ -512,13 +589,6 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn reset_dma(&self) -> Result<(), &'static str> {
         log::info!("🔄 Resetting DMA Mode");
 
-        log::info!("🔧 Disabling MAC");
-        self.set_bits(
-            regs::mac::CONFIG,
-            0x00000000,
-            // !regs::mac::MacConfig::RE.bits() & !regs::mac::MacConfig::TE.bits(),
-        );
-
         // Apply software reset
         self.inspect_reg("DMA SYS_BUS_MODE", regs::dma::SYS_BUS_MODE);
 
@@ -534,27 +604,11 @@ impl<H: DwmacHal> DwmacNic<H> {
         while self.read_reg(regs::dma::BUS_MODE) & regs::dma::DMA_RESET != 0 {
             if timeout == 0 {
                 log::error!("🔴 Hardware reset timeout");
-                break;
+                return Err("🔴 Hardware reset timeout");
             }
             timeout -= 1;
             H::wait_until(core::time::Duration::from_millis(1))?;
         }
-
-        // self.set_bits(
-        //     regs::dma::SYS_BUS_MODE,
-        //     regs::dma::DmaSysBusMode::FB.bits()
-        //         | regs::dma::DmaSysBusMode::MB.bits()
-        //         | regs::dma::DmaSysBusMode::AAL.bits()
-        //         | regs::dma::DmaSysBusMode::EAME.bits()
-        //         | regs::dma::DmaSysBusMode::AXI_BLEN16.bits()
-        //         | regs::dma::DmaSysBusMode::AXI_BLEN8.bits()
-        //         | regs::dma::DmaSysBusMode::AXI_BLEN4.bits(),
-        // );
-
-        // self.inspect_reg("DMA SYS_BUS_MODE", regs::dma::SYS_BUS_MODE);
-
-        // self.set_bits(regs::dma::BUS_MODE, regs::dma::DMA_BUS_MODE_INTM_MODE1);
-        // self.inspect_reg("DMA BUS_MODE", regs::dma::BUS_MODE);
 
         log::info!("✅ DMA Mode reset complete");
         Ok(())

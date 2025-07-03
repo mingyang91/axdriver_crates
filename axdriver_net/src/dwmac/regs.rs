@@ -123,6 +123,7 @@ pub mod mac {
 
     pub const CONFIG: usize = 0x0000;
     pub const FRAME_FILTER: usize = 0x0008;
+    pub const US_TIC_COUNTER: usize = 0x00dc;
     pub const GMII_ADDRESS: usize = 0x0200;
     pub const GMII_DATA: usize = 0x0204;
 
