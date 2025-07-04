@@ -221,6 +221,13 @@ impl<H: super::DwmacHal> Yt8531cPhy<H> {
         self.mdio.write_c22(self.phy_addr, REG_DEBUG_DATA, data)
     }
 
+    pub fn setbits_ext_reg(&self, ext_reg: u16, mask: u16, data: u16) -> Result<()> {
+        let mut value = self.read_ext_reg(ext_reg)?;
+        value &= !mask;
+        value |= data;
+        self.write_ext_reg(ext_reg, value)
+    }
+
     /// 读取标准寄存器
     pub fn read_reg(&self, reg: u16) -> Result<u16> {
         self.mdio.read_c22(self.phy_addr, reg)
