@@ -9,8 +9,7 @@ mod regs;
 use crate::dwmac::mdio::{
     Yt8531cPhy, YT8531C_BMSR, YT8531C_EXT_CHIP_CONFIG, YT8531C_EXT_RGMII_CONFIG1,
 };
-use crate::dwmac::regs::dma::{CHAN_RX_CTRL, DESC_OWN, RDES3};
-use crate::dwmac::regs::mtl;
+use crate::dwmac::regs::dma::{DESC_OWN, RDES3};
 use crate::{EthernetAddress, NetBufPtr, NetDriverOps};
 use axdriver_base::{BaseDriverOps, DevError, DevResult, DeviceType};
 use core::ptr::{read_volatile, write_volatile, NonNull};
@@ -442,8 +441,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         // clk_get_parent_rate(clk=00000000ff72c1c0)
         // clk_get_parent(clk=00000000ff72c1c0)
         // debug_writel: 00000000160400dc = 0x0000007c
-
-        // TODO: u-boot have this step, but we don't have it
+        nic.set_clock_freq(0x7c);
 
         // eqos_mdio_read(dev=00000000ff728340, addr=0, reg=1):
         // eqos_mdio_read: val=796d
@@ -451,8 +449,14 @@ impl<H: DwmacHal> DwmacNic<H> {
         // eqos_mdio_read: val=7c00
         // eqos_mdio_write(dev=00000000ff728340, addr=0, reg=30, val=a003):
         // ytphy_modify_ext: regnum=0xa003, mask=0x4000, set=0x4000
+        // eqos_mdio_read(dev=00000000ff728340, addr=0, reg=31):
+        // eqos_mdio_read: val=48f0
+        // eqos_mdio_write(dev=00000000ff728340, addr=0, reg=31, val=48f0):
+        // eqos_adjust_link(dev=00000000ff728340):
+        // eqos_set_full_duplex(dev=00000000ff728340):
+        // eqos_set_mii_speed_100(dev=00000000ff728340):
 
-        // Initialize hardware
+        // Initialize PHYs
         for i in 0..2 {
             mb();
             let _ = nic.init_phy(i).inspect_err(|e| {
@@ -460,19 +464,17 @@ impl<H: DwmacHal> DwmacNic<H> {
             });
         }
 
-        // eqos_mdio_read(dev=00000000ff728340, addr=0, reg=31):
-        // eqos_mdio_read: val=48f0
-        // eqos_mdio_write(dev=00000000ff728340, addr=0, reg=31, val=48f0):
-
-        // eqos_adjust_link(dev=00000000ff728340):
-        // eqos_set_full_duplex(dev=00000000ff728340):
-        // eqos_set_mii_speed_100(dev=00000000ff728340):
-
         // debug_writel: 0000000016040d18 = 0x00000010
+
+        // Initialize MTL
+        nic.init_mtl()?;
+
         // debug_writel: 0000000016040300 = 0x0000355d
         // debug_writel: 0000000016040304 = 0x0039cf6c
+        nic.setup_mac_address();
 
         // debug_writel: 0000000016041004 = 0x0002080e
+        nic.set_sys_bus_mode(0x0002080e); // dump from u-boot
 
         // debug_writel: 0000000016041110 = 0x00000000
         // debug_writel: 0000000016041114 = 0xff745840
@@ -481,6 +483,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         // debug_writel: 000000001604111c = 0xff745980
         // debug_writel: 0000000016041130 = 0x00000003
         // debug_writel: 0000000016041128 = 0xff745a40
+        nic.setup_descriptor_rings()?;
         // eqos_start: OK
 
         // eqos_send(dev=00000000ff728340, packet=00000000ff74ae80, length=350):
@@ -518,20 +521,9 @@ impl<H: DwmacHal> DwmacNic<H> {
         // DHCP client bound to address 192.168.1.47 (589 ms)
         // StarFive #
 
-        mb();
-        nic.setup_descriptor_rings()?;
-        mb();
-        nic.start_dma()?;
-        mb();
+        // nic.start_dma()?;
         // nic.enable_dma_interrupts()?;
-        nic.setup_mac_address();
-        mb();
-        // nic.set_qos()?;
-        // mb();
-        nic.start_mac()?;
-        mb();
-        nic.init_mtl()?;
-        mb();
+        // nic.start_mac()?;
 
         nic.inspect_reg("MAC version", regs::mac::VERSION);
         nic.inspect_reg("DMA STATUS", regs::dma::DMA_STATUS);
@@ -597,7 +589,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         self.write_reg(regs::dma::CHAN_RX_CTRL, 0x0);
         self.write_reg(regs::dma::CHAN_TX_CTRL, 0x0);
         H::wait_until(core::time::Duration::from_millis(10))?;
-        self.set_bits(regs::dma::BUS_MODE, regs::dma::DMA_RESET);
+        self.set_bits(regs::dma::BUS_MODE, regs::dma::DMA_RESET, 1);
 
         // Wait for reset to complete
         let mut timeout = 1000;
@@ -614,33 +606,17 @@ impl<H: DwmacHal> DwmacNic<H> {
         Ok(())
     }
 
+    fn set_clock_freq(&self, freq: u32) {
+        self.write_reg(regs::mac::US_TIC_COUNTER, freq);
+        self.inspect_reg("MAC US_TIC_COUNTER", regs::mac::US_TIC_COUNTER);
+    }
+
     /// Setup DMA descriptor rings
     fn setup_descriptor_rings(&mut self) -> Result<(), &'static str> {
         log::info!("🔧 Setting up descriptor rings");
 
         self.rx_ring.init_rx_ring()?;
         self.tx_ring.init_tx_ring()?;
-
-        // Set RX ring base address
-        self.write_reg(
-            regs::dma::CHAN_RX_BASE_ADDR_HI,
-            (self.rx_ring.get_descriptor_paddr(0) >> 32) as u32,
-        );
-        self.write_reg(
-            regs::dma::CHAN_RX_BASE_ADDR,
-            self.rx_ring.get_descriptor_paddr(0) as u32,
-        );
-        self.inspect_reg("DMA CHAN_RX_BASE_ADDR", regs::dma::CHAN_RX_BASE_ADDR);
-        // Set RX ring length
-        self.write_reg(regs::dma::CHAN_RX_RING_LEN, (RX_DESC_COUNT - 1) as u32);
-
-        // Set RX ring control
-        self.set_bits(
-            regs::dma::CHAN_RX_CTRL,
-            // 0x00100c01, // dump from linux
-            regs::dma::DMA_START_RX | regs::dma::DMA_RX_PBL_8,
-        );
-        self.inspect_reg("DMA CHAN_RX_CTRL", regs::dma::CHAN_RX_CTRL);
 
         // Set TX ring base address
         self.write_reg(
@@ -666,9 +642,36 @@ impl<H: DwmacHal> DwmacNic<H> {
         self.set_bits(
             regs::dma::CHAN_TX_CTRL,
             // 0x00101011, // dump from linux
+            !0,
             regs::dma::DMA_START_TX | regs::dma::DMA_TX_PBL_8,
         );
         self.inspect_reg("DMA CHAN_TX_CTRL", regs::dma::CHAN_TX_CTRL);
+
+        // Set RX ring base address
+        self.write_reg(
+            regs::dma::CHAN_RX_BASE_ADDR_HI,
+            (self.rx_ring.get_descriptor_paddr(0) >> 32) as u32,
+        );
+        self.write_reg(
+            regs::dma::CHAN_RX_BASE_ADDR,
+            self.rx_ring.get_descriptor_paddr(0) as u32,
+        );
+        self.inspect_reg("DMA CHAN_RX_BASE_ADDR", regs::dma::CHAN_RX_BASE_ADDR);
+        // Set RX ring length
+        self.write_reg(regs::dma::CHAN_RX_RING_LEN, (RX_DESC_COUNT - 1) as u32);
+
+        // Set RX ring control
+        self.set_bits(
+            regs::dma::CHAN_RX_CTRL,
+            // 0x00100c01, // dump from linux
+            !0,
+            regs::dma::DMA_START_RX | regs::dma::DMA_RX_PBL_8,
+        );
+        self.inspect_reg("DMA CHAN_RX_CTRL", regs::dma::CHAN_RX_CTRL);
+
+        // Set RX ring end address
+        self.update_rx_end_addr(self.rx_ring.get_descriptor_paddr(RX_DESC_COUNT - 1) as u32);
+        self.inspect_reg("DMA CHAN_RX_END_ADDR", regs::dma::CHAN_RX_END_ADDR);
 
         log::info!("✅ Descriptor rings ready");
         Ok(())
@@ -686,12 +689,8 @@ impl<H: DwmacHal> DwmacNic<H> {
         self.write_reg(regs::mac::FRAME_FILTER, regs::mac::PACKET_FILTER_ALL);
         self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
 
-        self.write_reg(regs::mac::CONFIG, regs::mac::CONFIG_DEFAULT);
-        // self.write_reg(regs::mac::CONFIG, 0x08072203);
-
-        // Set RX ring end address
-        self.update_rx_end_addr(self.rx_ring.get_descriptor_paddr(RX_DESC_COUNT - 1) as u32);
-        self.inspect_reg("DMA CHAN_RX_END_ADDR", regs::dma::CHAN_RX_END_ADDR);
+        // self.write_reg(regs::mac::CONFIG, regs::mac::CONFIG_DEFAULT);
+        // // self.write_reg(regs::mac::CONFIG, 0x08072203);
 
         log::info!("🔧 MAC enabled");
         self.inspect_reg("MAC VERSION", regs::mac::VERSION);
@@ -712,13 +711,15 @@ impl<H: DwmacHal> DwmacNic<H> {
         self.write_reg(regs::mac::ADDRESS0_LOW, mac_low);
     }
 
+    fn set_sys_bus_mode(&self, value: u32) {
+        self.write_reg(regs::dma::SYS_BUS_MODE, value);
+        self.inspect_reg("DMA SYS_BUS_MODE", regs::dma::SYS_BUS_MODE);
+    }
+
     /// Start DMA operations
     fn start_dma(&self) -> Result<(), &'static str> {
         log::info!("🚀 Starting DMA");
-        self.inspect_reg("DMA SYS_BUS_MODE", regs::dma::SYS_BUS_MODE);
-        self.set_bits(regs::dma::SYS_BUS_MODE, 0x030308F1); // dump from linux
-
-        self.set_bits(regs::dma::CHAN_BASE_ADDR, 0x1);
+        self.set_bits(regs::dma::CHAN_BASE_ADDR, !0, 0x1);
         self.inspect_reg("DMA CHAN_BASE_ADDR", regs::dma::CHAN_BASE_ADDR);
 
         Ok(())
@@ -727,18 +728,22 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn init_mtl(&self) -> Result<(), &'static str> {
         log::info!("🔧 Initializing MTL");
 
+        self.write_reg(regs::mtl::TXQ0_QUANTUM_WEIGHT, 0x10);
+        self.inspect_reg("MTL TXQ0_QUANTUM_WEIGHT", regs::mtl::TXQ0_QUANTUM_WEIGHT);
+
         // setbits_le32(&eqos->mtl_regs->txq0_operation_mode,
         //      EQOS_MTL_TXQ0_OPERATION_MODE_TSF |
         //      (EQOS_MTL_TXQ0_OPERATION_MODE_TXQEN_ENABLED <<
         //       EQOS_MTL_TXQ0_OPERATION_MODE_TXQEN_SHIFT));
-        self.set_bits(regs::mtl::TXQ0_OPERATION_MODE, 0x1 | 2 << 2);
+        self.set_bits(regs::mtl::TXQ0_OPERATION_MODE, !0, 0x1 | 2 << 2);
 
         self.inspect_reg("MTL TXQ0_OPERATION_MODE", regs::mtl::TXQ0_OPERATION_MODE);
 
         // setbits_le32(&eqos->mtl_regs->rxq0_operation_mode,
         //     EQOS_MTL_RXQ0_OPERATION_MODE_RSF);
         self.set_bits(
-            mtl::RXQ0_OPERATION_MODE,
+            regs::mtl::RXQ0_OPERATION_MODE,
+            !0,
             1 << 5 | 1 << 7 | (64 << 16) | (32 << 8),
         );
         self.inspect_reg("MTL RXQ0_OPERATION_MODE", regs::mtl::RXQ0_OPERATION_MODE);
@@ -793,11 +798,16 @@ impl<H: DwmacHal> DwmacNic<H> {
         //         "PHY not responding"
         //     })?;
 
-        // phy.write_ext_reg(YT8531C_EXT_RGMII_CONFIG1, 0xe91b) // Magic number
-        //     .map_err(|e| {
-        //         log::warn!("⚠️  PHY not responding: {:?}", e);
-        //         "PHY not responding"
-        //     })?;
+        let mut rgmii_config1 = phy.read_ext_reg(YT8531C_EXT_RGMII_CONFIG1).map_err(|e| {
+            log::warn!("⚠️  PHY not responding: {:?}", e);
+            "PHY not responding"
+        })?;
+        rgmii_config1 |= 0x4000;
+        phy.write_ext_reg(YT8531C_EXT_RGMII_CONFIG1, rgmii_config1)
+            .map_err(|e| {
+                log::warn!("⚠️  PHY not responding: {:?}", e);
+                "PHY not responding"
+            })?;
 
         // phy.write_ext_reg(YT8531C_EXT_CHIP_CONFIG, 0x7960) // Magic number
         //     .map_err(|e| {
@@ -820,31 +830,31 @@ impl<H: DwmacHal> DwmacNic<H> {
             phy.read_ext_reg(YT8531C_EXT_RGMII_CONFIG1).unwrap()
         );
 
-        let mut phyif_ctrl = self.read_reg(regs::mac::PHYIF_CONTROL_STATUS);
-        // 设置为RGMII模式 (bits [2:1] = 0b01)
-        phyif_ctrl &= !(0x3 << 1); // 清除PHY接口模式位
-        phyif_ctrl |= 0x1 << 1; // 设置为RGMII模式
+        // let mut phyif_ctrl = self.read_reg(regs::mac::PHYIF_CONTROL_STATUS);
+        // // 设置为RGMII模式 (bits [2:1] = 0b01)
+        // phyif_ctrl &= !(0x3 << 1); // 清除PHY接口模式位
+        // phyif_ctrl |= 0x1 << 1; // 设置为RGMII模式
 
-        // 启用链路状态检测
-        phyif_ctrl |= 1 << 16; // LNKMOD: 链路模式
-        phyif_ctrl |= 1 << 17; // LNKSTS: 链路状态
+        // // 启用链路状态检测
+        // phyif_ctrl |= 1 << 16; // LNKMOD: 链路模式
+        // phyif_ctrl |= 1 << 17; // LNKSTS: 链路状态
 
-        phyif_ctrl |= 0x000d0000; // dump from linux
+        // phyif_ctrl |= 0x000d0000; // dump from linux
 
-        self.write_reg(regs::mac::PHYIF_CONTROL_STATUS, phyif_ctrl);
+        // self.write_reg(regs::mac::PHYIF_CONTROL_STATUS, phyif_ctrl);
 
-        H::wait_until(core::time::Duration::from_millis(100))?;
-        // let mut timeout = 1000;
-        // while self.read_reg(regs::mac::PHYIF_CONTROL_STATUS) != phyif_ctrl {
-        //     if timeout == 0 {
-        //         log::error!("PHYIF_CONTROL_STATUS timeout");
-        //         break;
-        //     }
-        //     timeout -= 1;
-        //     H::wait_until(core::time::Duration::from_millis(1))?;
-        // }
+        // H::wait_until(core::time::Duration::from_millis(100))?;
+        // // let mut timeout = 1000;
+        // // while self.read_reg(regs::mac::PHYIF_CONTROL_STATUS) != phyif_ctrl {
+        // //     if timeout == 0 {
+        // //         log::error!("PHYIF_CONTROL_STATUS timeout");
+        // //         break;
+        // //     }
+        // //     timeout -= 1;
+        // //     H::wait_until(core::time::Duration::from_millis(1))?;
+        // // }
 
-        self.inspect_reg("PHYIF_CONTROL_STATUS", regs::mac::PHYIF_CONTROL_STATUS);
+        // self.inspect_reg("PHYIF_CONTROL_STATUS", regs::mac::PHYIF_CONTROL_STATUS);
 
         Ok(())
     }
@@ -886,17 +896,17 @@ impl<H: DwmacHal> DwmacNic<H> {
     }
 
     /// Set bits in a register
-    fn set_bits(&self, offset: usize, mask: u32) {
-        self.write_reg(offset, self.read_reg(offset) | mask);
+    fn set_bits(&self, offset: usize, mask: u32, value: u32) {
+        self.write_reg(offset, (self.read_reg(offset) & !mask) | (value & mask));
     }
 
     /// 写入TX DMA轮询请求寄存器
     fn start_tx_dma(&self) {
-        self.set_bits(regs::dma::CHAN_TX_CTRL, 1);
+        self.set_bits(regs::dma::CHAN_TX_CTRL, 1, 1);
     }
 
     fn start_rx_dma(&self) {
-        self.set_bits(regs::dma::CHAN_RX_CTRL, 1);
+        self.set_bits(regs::dma::CHAN_RX_CTRL, 1, 1);
     }
 
     fn write_rx_tail_id(&self) {
@@ -917,7 +927,7 @@ impl<H: DwmacHal> DwmacNic<H> {
     // }
 
     fn inspect_mtl_regs(&self) {
-        if COUNTER.load(Ordering::Acquire) % 100 != 0 {
+        if COUNTER.load(Ordering::Acquire) % 1000 != 0 {
             return;
         }
         self.inspect_reg("MTL TXQ0_OPERATION_MODE", regs::mtl::TXQ0_OPERATION_MODE);
@@ -929,7 +939,7 @@ impl<H: DwmacHal> DwmacNic<H> {
 
     fn inspect_dma_regs(&self) {
         COUNTER.fetch_add(1, Ordering::AcqRel);
-        if COUNTER.load(Ordering::Acquire) % 100 != 0 {
+        if COUNTER.load(Ordering::Acquire) % 1000 != 0 {
             return;
         }
         log::debug!("--------------------------------");
@@ -980,7 +990,7 @@ impl<H: DwmacHal> DwmacNic<H> {
     }
 
     fn start_dma_rx(&self) {
-        self.set_bits(regs::dma::CHAN_RX_CTRL, 1);
+        self.set_bits(regs::dma::CHAN_RX_CTRL, 1, 1);
     }
 }
 
