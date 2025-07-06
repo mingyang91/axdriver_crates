@@ -123,6 +123,19 @@ pub mod mac {
 
     pub const CONFIG: usize = 0x0000;
     pub const FRAME_FILTER: usize = 0x0008;
+    // #define GMAC_QX_TX_FLOW_CTRL(x)		(0x70 + x * 4)
+    pub const Q0_TX_FLOW_CTRL: usize = 0x70;
+    pub const Q1_TX_FLOW_CTRL: usize = 0x74;
+    pub const Q2_TX_FLOW_CTRL: usize = 0x78;
+    pub const Q3_TX_FLOW_CTRL: usize = 0x7c;
+    pub const RX_FLOW_CTRL: usize = 0x90;
+    pub const TXQ_PRTY_MAP0: usize = 0x98;
+    pub const TXQ_PRTY_MAP1: usize = 0x9c;
+
+    pub const RXQ_CTRL0: usize = 0x00a0;
+    pub const RXQ_CTRL1: usize = 0x00a4;
+    pub const RXQ_CTRL2: usize = 0x00a8;
+    pub const RXQ_CTRL3: usize = 0x00ac;
     pub const US_TIC_COUNTER: usize = 0x00dc;
     pub const GMII_ADDRESS: usize = 0x0200;
     pub const GMII_DATA: usize = 0x0204;

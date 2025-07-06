@@ -11,6 +11,7 @@ use crate::dwmac::mdio::{
     YT8531C_EXT_RGMII_CONFIG1, YT8531C_EXT_SYNCE_CFG,
 };
 use crate::dwmac::regs::dma::{CHAN_TX_CTRL, DESC_OWN, RDES3};
+use crate::dwmac::regs::mac::PACKET_FILTER_ALL;
 use crate::{EthernetAddress, NetBufPtr, NetDriverOps};
 use axdriver_base::{BaseDriverOps, DevError, DevResult, DeviceType};
 use core::ptr::{read_volatile, write_volatile, NonNull};
@@ -469,6 +470,7 @@ impl<H: DwmacHal> DwmacNic<H> {
 
         // Initialize MTL
         nic.init_mtl()?;
+        nic.flow_control()?;
 
         // debug_writel: 0000000016040300 = 0x0000355d
         // debug_writel: 0000000016040304 = 0x0039cf6c
@@ -669,10 +671,10 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn start_mac(&self) -> Result<(), &'static str> {
         log::info!("🔧 Configuring MAC");
 
-        self.write_reg(regs::mac::FRAME_FILTER, regs::mac::PACKET_FILTER_ALL);
-        self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
+        // self.write_reg(regs::mac::FRAME_FILTER, regs::mac::PACKET_FILTER_ALL);
+        // self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
 
-        // setbits_le32 mac_regs->configuration(0000000016040000): 30e003
+        // // setbits_le32 mac_regs->configuration(0000000016040000): 30e003
         self.write_reg(regs::mac::CONFIG, 0x30e003);
         self.inspect_reg("MAC CONFIG", regs::mac::CONFIG);
 
@@ -755,6 +757,39 @@ impl<H: DwmacHal> DwmacNic<H> {
         // clrsetbits_le32 mtl_regs->rxq0_operation_mode(0000000016040d30), mask: 3ff00000, val: 700000, final: 700020
         self.set_bits(regs::mtl::RXQ0_OPERATION_MODE, 0x3ff00000, 0x700000);
         self.inspect_reg("MTL RXQ0_OPERATION_MODE", regs::mtl::RXQ0_OPERATION_MODE);
+
+        Ok(())
+    }
+
+    fn flow_control(&self) -> Result<(), &'static str> {
+        log::info!("🔧 Configuring flow control");
+        // clrsetbits_le32 mac_regs->rxq_ctrl0(00000000160400a0), mask: 3, val: 2, final: 0
+        self.set_bits(regs::mac::RXQ_CTRL0, 0x3, 0x2);
+        self.inspect_reg("MAC RXQ_CTRL0", regs::mac::RXQ_CTRL0);
+        // setbits_le32 mac_regs->unused_0a4(00000000160400a4): 0
+        self.write_reg(regs::mac::RXQ_CTRL1, 0);
+        self.inspect_reg("MAC RXQ_CTRL1", regs::mac::RXQ_CTRL1);
+        // setbits_le32 mac_regs->unused_004[1](0000000016040008): 1
+        self.write_reg(regs::mac::FRAME_FILTER, PACKET_FILTER_ALL);
+        self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
+        // setbits_le32 mac_regs->q0_tx_flow_ctrl(0000000016040070): ffff0000
+        self.write_reg(regs::mac::Q0_TX_FLOW_CTRL, 0xffff0000);
+        self.inspect_reg("MAC Q0_TX_FLOW_CTRL", regs::mac::Q0_TX_FLOW_CTRL);
+        // clrbits_le32 mac_regs->txq_prty_map0(0000000016040098), mask: ff, val: 0, final: 0
+        self.set_bits(regs::mac::TXQ_PRTY_MAP0, 0xff, 0);
+        self.inspect_reg("MAC TXQ_PRTY_MAP0", regs::mac::TXQ_PRTY_MAP0);
+        // clrbits_le32 mac_regs->rxq_ctrl2(00000000160400a8), mask: ff, val: 0, final: 0
+        self.set_bits(regs::mac::RXQ_CTRL2, 0xff, 0);
+        self.inspect_reg("MAC RXQ_CTRL2", regs::mac::RXQ_CTRL2);
+        // setbits_le32 mac_regs->q0_tx_flow_ctrl(0000000016040070): ffff0002
+        self.write_reg(regs::mac::Q0_TX_FLOW_CTRL, 0xffff0002);
+        self.inspect_reg("MAC Q0_TX_FLOW_CTRL", regs::mac::Q0_TX_FLOW_CTRL);
+        // setbits_le32 mac_regs->rx_flow_ctrl(0000000016040090): 1
+        self.write_reg(regs::mac::RX_FLOW_CTRL, 0x1);
+        self.inspect_reg("MAC RX_FLOW_CTRL", regs::mac::RX_FLOW_CTRL);
+        // clrsetbits_le32 mac_regs->configuration(0000000016040000), mask: 8b0000, val: 300000, final: 30e000
+        self.set_bits(regs::mac::CONFIG, 0x8b0000, 0x300000);
+        self.inspect_reg("MAC CONFIG", regs::mac::CONFIG);
 
         Ok(())
     }
@@ -993,7 +1028,7 @@ impl<H: DwmacHal> DwmacNic<H> {
     // }
 
     fn inspect_mtl_regs(&self) {
-        if COUNTER.load(Ordering::Acquire) % 1000 != 0 {
+        if COUNTER.load(Ordering::Acquire) % 10000 != 0 {
             return;
         }
         self.inspect_reg("MTL TXQ0_OPERATION_MODE", regs::mtl::TXQ0_OPERATION_MODE);
@@ -1005,7 +1040,7 @@ impl<H: DwmacHal> DwmacNic<H> {
 
     fn inspect_dma_regs(&self) {
         COUNTER.fetch_add(1, Ordering::AcqRel);
-        if COUNTER.load(Ordering::Acquire) % 1000 != 0 {
+        if COUNTER.load(Ordering::Acquire) % 10000 != 0 {
             return;
         }
         log::debug!("--------------------------------");
@@ -1127,8 +1162,8 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
-        // self.inspect_dma_regs();
-        // self.inspect_mtl_regs();
+        self.inspect_dma_regs();
+        self.inspect_mtl_regs();
         self.scan_rx_ring();
         if !self.can_receive() {
             return Err(DevError::Again);
