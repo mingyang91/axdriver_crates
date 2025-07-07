@@ -325,6 +325,60 @@ pub mod dma {
     pub const CHAN_CUR_RX_DESC: usize = CHAN_BASE_ADDR + 0x4c;
     pub const CHAN_STATUS: usize = CHAN_BASE_ADDR + 0x60;
 
+    /* Interrupt status per channel */
+    // #define DMA_CHAN_STATUS_REB		GENMASK(21, 19)
+    pub const DMA_CHAN_STATUS_REB: u32 = 0b111 << 19;
+    // #define DMA_CHAN_STATUS_REB_SHIFT	19
+    pub const DMA_CHAN_STATUS_REB_SHIFT: u32 = 19;
+    // #define DMA_CHAN_STATUS_TEB		GENMASK(18, 16)
+    pub const DMA_CHAN_STATUS_TEB: u32 = 0b111 << 16;
+    // #define DMA_CHAN_STATUS_TEB_SHIFT	16
+    pub const DMA_CHAN_STATUS_TEB_SHIFT: u32 = 16;
+    // #define DMA_CHAN_STATUS_NIS		BIT(15)
+    pub const DMA_CHAN_STATUS_NIS: u32 = 1 << 15;
+    // #define DMA_CHAN_STATUS_AIS		BIT(14)
+    pub const DMA_CHAN_STATUS_AIS: u32 = 1 << 14;
+    // #define DMA_CHAN_STATUS_CDE		BIT(13)
+    pub const DMA_CHAN_STATUS_CDE: u32 = 1 << 13;
+    // #define DMA_CHAN_STATUS_FBE		BIT(12)
+    pub const DMA_CHAN_STATUS_FBE: u32 = 1 << 12;
+    // #define DMA_CHAN_STATUS_ERI		BIT(11)
+    pub const DMA_CHAN_STATUS_ERI: u32 = 1 << 11;
+    // #define DMA_CHAN_STATUS_ETI		BIT(10)
+    pub const DMA_CHAN_STATUS_ETI: u32 = 1 << 10;
+    // #define DMA_CHAN_STATUS_RWT		BIT(9)
+    pub const DMA_CHAN_STATUS_RWT: u32 = 1 << 9;
+    // #define DMA_CHAN_STATUS_RPS		BIT(8)
+    pub const DMA_CHAN_STATUS_RPS: u32 = 1 << 8;
+    // #define DMA_CHAN_STATUS_RBU		BIT(7)
+    pub const DMA_CHAN_STATUS_RBU: u32 = 1 << 7;
+    // #define DMA_CHAN_STATUS_RI		BIT(6)
+    pub const DMA_CHAN_STATUS_RI: u32 = 1 << 6;
+    // #define DMA_CHAN_STATUS_TBU		BIT(2)
+    pub const DMA_CHAN_STATUS_TBU: u32 = 1 << 2;
+    // #define DMA_CHAN_STATUS_TPS		BIT(1)
+    pub const DMA_CHAN_STATUS_TPS: u32 = 1 << 1;
+    // #define DMA_CHAN_STATUS_TI		BIT(0)
+    pub const DMA_CHAN_STATUS_TI: u32 = 1 << 0;
+    pub fn debug_chan_status(status: u32) {
+        let rebs = (status & DMA_CHAN_STATUS_REB) >> DMA_CHAN_STATUS_REB_SHIFT;
+        let tebs = (status & DMA_CHAN_STATUS_TEB) >> DMA_CHAN_STATUS_TEB_SHIFT;
+        let nis = status & DMA_CHAN_STATUS_NIS != 0;
+        let ais = status & DMA_CHAN_STATUS_AIS != 0;
+        let cde = status & DMA_CHAN_STATUS_CDE != 0;
+        let fbe = status & DMA_CHAN_STATUS_FBE != 0;
+        let eri = status & DMA_CHAN_STATUS_ERI != 0;
+        let eti = status & DMA_CHAN_STATUS_ETI != 0;
+        let rwt = status & DMA_CHAN_STATUS_RWT != 0;
+        let rps = status & DMA_CHAN_STATUS_RPS != 0;
+        let rbu = status & DMA_CHAN_STATUS_RBU != 0;
+        let ri = status & DMA_CHAN_STATUS_RI != 0;
+        let tbu = status & DMA_CHAN_STATUS_TBU != 0;
+        let tps = status & DMA_CHAN_STATUS_TPS != 0;
+        let ti = status & DMA_CHAN_STATUS_TI != 0;
+        log::trace!("DMA_CHAN_STATUS: {status:#x}, REB: {rebs}, TEB: {tebs}, NIS: {nis}, AIS: {ais}, CDE: {cde}, FBE: {fbe}, ERI: {eri}, ETI: {eti}, RWT: {rwt}, RPS: {rps}, RBU: {rbu}, RI: {ri}, TBU: {tbu}, TPS: {tps}, TI: {ti}");
+    }
+
     pub const STATUS: usize = 0x1014;
     pub const OPERATION_MODE: usize = 0x1018;
 
