@@ -21,10 +21,10 @@ use core::{u8, usize};
 /// Hardware abstraction layer for DWMAC driver
 pub trait DwmacHal: Send + Sync {
     /// Allocate DMA-coherent memory
-    fn dma_alloc(size: usize) -> (PhysAddr, NonNull<u8>);
+    fn dma_alloc(size: usize, align: usize) -> (PhysAddr, NonNull<u8>);
 
     /// Deallocate DMA-coherent memory
-    unsafe fn dma_dealloc(paddr: PhysAddr, vaddr: NonNull<u8>, size: usize) -> i32;
+    unsafe fn dma_dealloc(paddr: PhysAddr, vaddr: NonNull<u8>, size: usize, align: usize) -> i32;
 
     /// Convert physical to virtual address
     unsafe fn mmio_phys_to_virt(paddr: PhysAddr, size: usize) -> NonNull<u8>;
@@ -49,7 +49,7 @@ pub type PhysAddr = usize;
 /// Buffer sizes
 const TX_DESC_COUNT: usize = 8;
 const RX_DESC_COUNT: usize = 16;
-const MAX_FRAME_SIZE: usize = (1536 + 64 - 1) / 64 * 64;
+const MAX_FRAME_SIZE: usize = 1600; // (1536 + 64 - 1) / 64 * 64;
 
 #[repr(C, align(64))]
 #[derive(Debug, Copy, Clone)]
@@ -101,11 +101,7 @@ impl DmaDescriptor {
 
     fn set_des3(&mut self, des3: u32) {
         mb();
-        unsafe {
-            write_volatile(&mut self.des3, self.des3() & !DESC_OWN);
-            mb();
-            write_volatile(&mut self.des3, des3)
-        };
+        unsafe { write_volatile(&mut self.des3, des3) };
         mb();
     }
 
@@ -116,11 +112,7 @@ impl DmaDescriptor {
 
     /// Clear the DMA ownership bit
     pub fn clear_own(&mut self) {
-        mb();
-        unsafe {
-            write_volatile(&mut self.des3, self.des3() & !DESC_OWN);
-        }
-        mb();
+        self.set_des3(self.des3() & !DESC_OWN);
     }
 
     /// Check if descriptor is owned by DMA hardware
@@ -167,7 +159,7 @@ impl<H: DwmacHal> DmaExtendedDescriptor<H> {
 
     pub fn set_buffer_paddr(&mut self, addr: PhysAddr) {
         self.basic.set_des0(addr as u32);
-        self.basic.set_des1(0);
+        self.basic.set_des1((addr >> 32) as u32);
         mb();
     }
 
@@ -191,7 +183,8 @@ impl<H: DwmacHal> DmaExtendedDescriptor<H> {
 }
 
 pub struct DescriptorRing<const N: usize, H: DwmacHal> {
-    descriptors: [DmaExtendedDescriptor<H>; N],
+    descriptors: *const [DmaExtendedDescriptor<H>; N],
+    phy_descriptors: PhysAddr,
     buffers: [*mut u8; N],
     buffer_size: usize,
     head: AtomicUsize,
@@ -202,8 +195,16 @@ pub struct DescriptorRing<const N: usize, H: DwmacHal> {
 
 impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     fn new(buffer_size: usize) -> Self {
+        let (phy_descriptors, descriptors) =
+            H::dma_alloc(N * size_of::<DmaExtendedDescriptor<H>>(), 64);
+        log::info!(
+            "🔍 Descriptor ring allocated at bus: 0x{:0>8x}, virt: {:p}",
+            phy_descriptors,
+            descriptors.as_ptr()
+        );
         Self {
-            descriptors: [const { DmaExtendedDescriptor::<H>::new() }; N],
+            descriptors: descriptors.as_ptr().cast(),
+            phy_descriptors,
             buffers: [core::ptr::null_mut(); N],
             buffer_size,
             head: AtomicUsize::new(0),
@@ -213,19 +214,28 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
         }
     }
 
+    fn descriptors(&self) -> &[DmaExtendedDescriptor<H>; N] {
+        unsafe { &*self.descriptors }
+    }
+
+    fn descriptors_mut(&self) -> &mut [DmaExtendedDescriptor<H>; N] {
+        unsafe { &mut *(self.descriptors as *mut _) }
+    }
+
     fn flush_descriptors(&self) {
         unsafe {
             H::cache_flush_range(
-                NonNull::new(self.descriptors.as_ptr() as *mut u8).unwrap(),
-                NonNull::new(self.descriptors.as_ptr().add(N - 1) as *mut u8).unwrap(),
+                NonNull::new(self.descriptors as *mut u8).unwrap(),
+                NonNull::new(self.descriptors.add(N - 1) as *mut u8).unwrap(),
             );
         }
         mb();
     }
 
     pub fn init_rx_ring(&mut self) -> Result<(), &'static str> {
-        for (i, desc) in self.descriptors.iter_mut().enumerate() {
-            let (buffer_paddr, buffer_vaddr) = H::dma_alloc(self.buffer_size);
+        for i in 0..N {
+            let desc = &mut self.descriptors_mut()[i];
+            let (buffer_paddr, buffer_vaddr) = H::dma_alloc(self.buffer_size, 64);
             desc.set_buffer_paddr(buffer_paddr);
             desc.basic.set_des2(0); // we don't need to set buffer size
             desc.basic
@@ -243,13 +253,11 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     }
 
     pub fn init_tx_ring(&mut self) -> Result<(), &'static str> {
-        for desc in self.descriptors.iter_mut() {
+        for desc in self.descriptors_mut().iter_mut() {
             desc.basic.des0 = 0x0;
             desc.basic.des1 = 0x0;
             desc.basic.des2 = 0x0;
             desc.basic.des3 = 0x0;
-
-            desc.basic.clear_own();
         }
 
         self.head.store(0, Ordering::Relaxed);
@@ -264,12 +272,7 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     }
 
     pub fn get_descriptor_paddr(&self, index: usize) -> PhysAddr {
-        unsafe {
-            H::mmio_virt_to_phys(
-                NonNull::new(&self.descriptors[index] as *const _ as *mut _).unwrap(),
-                16,
-            )
-        }
+        self.phy_descriptors + index * size_of::<DmaExtendedDescriptor<H>>()
     }
 
     pub fn head(&self) -> usize {
@@ -297,12 +300,12 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
             return None;
         }
 
-        let current = &self.descriptors[head];
+        let current = &self.descriptors()[head];
         if current.is_owned_by_dma() {
             return None;
         }
 
-        Some(&self.descriptors[head])
+        Some(&current)
     }
 
     pub fn get_next_tx_descriptor_mut(&mut self) -> Option<&mut DmaExtendedDescriptor<H>> {
@@ -314,22 +317,22 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
             return None;
         }
 
-        let current = &self.descriptors[head];
+        let current = &self.descriptors()[head];
         if current.is_owned_by_dma() {
             return None;
         }
 
-        Some(&mut self.descriptors[head])
+        Some(&mut self.descriptors_mut()[head])
     }
 
     pub fn get_completed_rx_descriptor(&mut self) -> Option<(usize, *mut u8)> {
         let head = self.head();
-        let desc = &self.descriptors[head];
+        let desc = &self.descriptors()[head];
         if desc.is_owned_by_dma() {
             return None;
         }
         self.advance_head();
-        let desc = &mut self.descriptors[head];
+        let desc = &mut self.descriptors_mut()[head];
 
         let result = if (desc.basic.des3() & RDES3::ERROR_SUMMARY.bits()) != 0 {
             log::error!("🔍 Error summary: {:#x}", desc.basic.des3());
@@ -354,7 +357,7 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
 
         let mut current = tail;
         while current != head {
-            let desc = &mut self.descriptors[current];
+            let desc = &mut self.descriptors_mut()[current];
             if desc.is_owned_by_dma() {
                 break;
             }
@@ -380,7 +383,7 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     }
 
     pub fn recycle_rx_descriptor(&mut self, desc_index: usize) -> Result<(), &'static str> {
-        let desc = &mut self.descriptors[desc_index];
+        let desc = &mut self.descriptors_mut()[desc_index];
 
         desc.basic
             .set_des3(regs::dma::DESC_OWN | RDES3::BUFFER1_VALID_ADDR.bits());
@@ -397,11 +400,11 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     }
 
     pub fn has_available_tx(&self) -> bool {
-        !self.is_full() && !self.descriptors[self.head()].is_owned_by_dma()
+        !self.is_full() && !self.descriptors()[self.head()].is_owned_by_dma()
     }
 
     pub fn has_completed_rx(&self) -> bool {
-        !self.descriptors[self.head()].is_owned_by_dma()
+        !self.descriptors()[self.head()].is_owned_by_dma()
     }
 
     pub fn advance_recycle_index(&self) {
@@ -646,13 +649,6 @@ impl<H: DwmacHal> DwmacNic<H> {
         // Set TX ring length
         self.write_reg(regs::dma::CHAN_TX_RING_LEN, (TX_DESC_COUNT - 1) as u32);
 
-        // Set TX ring end address
-        self.write_reg(
-            regs::dma::CHAN_TX_END_ADDR,
-            self.tx_ring.get_descriptor_paddr(TX_DESC_COUNT - 1) as u32,
-        );
-        self.inspect_reg("DMA CHAN_TX_END_ADDR", regs::dma::CHAN_TX_END_ADDR);
-
         // Set RX ring base address
         self.write_reg(
             regs::dma::CHAN_RX_BASE_ADDR_HI,
@@ -673,6 +669,13 @@ impl<H: DwmacHal> DwmacNic<H> {
         // Set RX ring control
         self.write_reg(regs::dma::CHAN_RX_CTRL, 0x80c81);
         self.inspect_reg("DMA CHAN_RX_CTRL", regs::dma::CHAN_RX_CTRL);
+
+        // Set TX ring end address
+        // self.write_reg(
+        //     regs::dma::CHAN_TX_END_ADDR,
+        //     self.tx_ring.get_descriptor_paddr(TX_DESC_COUNT - 1) as u32,
+        // );
+        // self.inspect_reg("DMA CHAN_TX_END_ADDR", regs::dma::CHAN_TX_END_ADDR);
 
         log::info!("✅ Descriptor rings ready");
         Ok(())
@@ -1006,7 +1009,9 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn read_reg(&self, offset: usize) -> u32 {
         unsafe {
             let addr = self.base_addr.as_ptr().add(offset) as *const u32;
-            core::ptr::read_volatile(addr)
+            let res = core::ptr::read_volatile(addr);
+            mb();
+            res
         }
     }
 
@@ -1025,6 +1030,7 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn write_reg(&self, offset: usize, value: u32) {
         unsafe {
             let addr = self.base_addr.as_ptr().add(offset) as *mut u32;
+            mb();
             core::ptr::write_volatile(addr, value);
         }
     }
@@ -1115,9 +1121,15 @@ impl<H: DwmacHal> DwmacNic<H> {
             return;
         }
         for i in 0..RX_DESC_COUNT {
-            let desc = &self.rx_ring.descriptors[i];
+            let desc = &self.rx_ring.descriptors()[i];
             if !desc.is_owned_by_dma() {
                 log::debug!("RX buffer owned by CPU, index: {}", i);
+            }
+            if (desc.basic.des3() & !RDES3::BUFFER1_VALID_ADDR.bits() & !DESC_OWN) != 0 {
+                log::debug!("RX buffer status: {}", desc.basic.des3());
+            }
+            if desc.basic.des2() != 0 {
+                log::debug!("RX buffer size: {}", desc.basic.des2());
             }
         }
     }
@@ -1231,7 +1243,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
 
     fn recycle_rx_buffer(&mut self, rx_buf: NetBufPtr) -> DevResult {
         let recycle_index = self.rx_ring.get_recycle_index();
-        let desc = &mut self.rx_ring.descriptors[recycle_index];
+        let desc = &mut self.rx_ring.descriptors_mut()[recycle_index];
 
         desc.set_buffer_vaddr(rx_buf.raw_ptr::<u8>(), self.rx_ring.buffer_size);
         desc.basic.set_des2(0);
@@ -1262,7 +1274,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
             return Err(DevError::InvalidParam);
         }
 
-        let (buf_phys, buf_virt) = H::dma_alloc(size);
+        let (buf_phys, buf_virt) = H::dma_alloc(size, 64);
         if buf_phys == 0 {
             return Err(DevError::NoMemory);
         }
