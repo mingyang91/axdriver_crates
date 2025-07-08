@@ -918,7 +918,7 @@ impl<H: DwmacHal> DwmacNic<H> {
                 "PHY not responding"
             })?;
 
-            if bmsr != 0x7949 {
+            if bmsr == 0x796d {
                 // 0x796d is target value
                 log::info!("🔍 PHY BMSR: {:#x}", bmsr);
                 break;
