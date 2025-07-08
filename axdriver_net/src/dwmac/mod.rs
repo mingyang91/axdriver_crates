@@ -918,6 +918,7 @@ impl<H: DwmacHal> DwmacNic<H> {
                 "PHY not responding"
             })?;
 
+            // NOTE: 非常重要，PHY 稳定前配置 GMAC 会导致网卡无法正常工作。
             if bmsr == 0x796d {
                 // 0x796d is target value
                 log::info!("🔍 PHY BMSR: {:#x}", bmsr);
