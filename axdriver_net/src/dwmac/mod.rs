@@ -545,7 +545,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         // StarFive #
 
         nic.start_dma()?;
-        // nic.enable_dma_interrupts()?;
+        nic.enable_dma_interrupts()?;
         nic.start_mac()?;
 
         nic.inspect_reg("DMA STATUS", regs::dma::DMA_STATUS);
@@ -1137,6 +1137,7 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn clear_intr_status(&self) {
         let status = self.read_reg(regs::dma::CHAN_STATUS);
         if status != 0 {
+            log::info!("clear_intr_status: {:#x}", status);
             self.write_reg(regs::dma::CHAN_STATUS, status);
         }
     }
@@ -1214,9 +1215,9 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
         mb();
-        self.inspect_dma_regs();
-        self.inspect_mtl_regs();
-        self.scan_rx_ring();
+        // self.inspect_dma_regs();
+        // self.inspect_mtl_regs();
+        // self.scan_rx_ring();
         if !self.can_receive() {
             return Err(DevError::Again);
         }
@@ -1231,6 +1232,8 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
             NonNull::new(buffer_ptr).unwrap(),
             packet_len,
         );
+
+        self.clear_intr_status();
 
         log::trace!(
             "Packet received, length: {}, RX index: {}",
