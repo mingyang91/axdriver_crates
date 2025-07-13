@@ -254,8 +254,8 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
             desc.basic.des3 = 0x0;
         }
 
-        self.head.store(N - 1, Ordering::Relaxed);
-        self.tail.store(N - 1, Ordering::Relaxed);
+        self.head.store(0, Ordering::Relaxed);
+        self.tail.store(0, Ordering::Relaxed);
         for addr in self.buffers.iter_mut() {
             *addr = core::ptr::null_mut();
         }
@@ -301,13 +301,14 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
             return None;
         }
 
-        let current = &self.descriptors()[next];
+        let tail = self.tail();
+        let current = &self.descriptors()[tail];
         if current.is_owned_by_dma() {
             log::error!("🔍 TX descriptor is owned by DMA");
             return None;
         }
 
-        Some((next, &mut self.descriptors_mut()[next]))
+        Some((tail, &mut self.descriptors_mut()[tail]))
     }
 
     pub fn get_completed_rx_descriptor(&mut self) -> Option<(usize, *mut u8, usize)> {
