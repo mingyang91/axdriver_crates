@@ -105,17 +105,11 @@ impl DmaDescriptor {
     fn set_des3(&mut self, des3: u32) {
         mb();
         unsafe { write_volatile(&mut self.des3, des3) };
-        mb();
     }
 
     /// Set the descriptor as owned by DMA hardware
     pub fn set_own(&mut self) {
         self.set_des3(self.des3() | DESC_OWN);
-    }
-
-    /// Clear the DMA ownership bit
-    pub fn clear_own(&mut self) {
-        self.set_des3(self.des3() & !DESC_OWN);
     }
 
     /// Check if descriptor is owned by DMA hardware
@@ -354,6 +348,7 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
             }
             let vaddr = self.buffers[current];
             if vaddr != core::ptr::null_mut() {
+                log::trace!("🔍 Reclaiming TX descriptor: {}", current);
                 let paddr = desc.basic.des0() as usize | ((desc.basic.des1() as usize) << 32);
                 let size = desc.basic.des2() as usize;
 
@@ -361,13 +356,14 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
                     H::dma_dealloc(paddr, NonNull::new(vaddr as *mut u8).unwrap(), size, 64);
                 }
 
-                desc.basic.clear_own();
                 desc.basic.set_des0(0x0);
                 desc.basic.set_des1(0x0);
                 desc.basic.set_des2(0x0);
                 desc.basic.set_des3(0x0);
 
                 self.buffers[current] = core::ptr::null_mut();
+            } else {
+                log::error!("Buffer is not valid: {}", current);
             }
 
             current = (current + 1) % N;
@@ -437,7 +433,7 @@ impl<H: DwmacHal> DwmacNic<H> {
 
         let mut nic = Self {
             base_addr,
-            mac_addr: [0x02, 0x03, 0x04, 0x05, 0x06, 0x07], // Default MAC
+            mac_addr: [0x35, 0x5d, 0x00, 0x39, 0xcf, 0x6c], // Default MAC
             link_up: AtomicBool::new(true),
 
             tx_ring: DescriptorRing::<TX_DESC_COUNT, H>::new(MAX_FRAME_SIZE),
@@ -1209,7 +1205,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
 
         self.tx_ring.advance_tail();
 
-        self.update_tx_end_addr(index);
+        self.update_tx_end_addr(self.tx_ring.tail());
 
         log::trace!("Packet transmitted, TX index: {}", index);
 
