@@ -290,12 +290,74 @@ pub mod mac {
 
 /// MTL registers
 pub mod mtl {
+    use bitflags::bitflags;
     pub const BASE_ADDR: usize = 0xd00;
     pub const TXQ0_OPERATION_MODE: usize = 0xd00;
     pub const TXQ0_DEBUG: usize = 0xd08;
     pub const TXQ0_QUANTUM_WEIGHT: usize = 0xd18;
     pub const RXQ0_OPERATION_MODE: usize = 0xd30;
     pub const RXQ0_DEBUG: usize = 0xd38;
+
+    bitflags! {
+        pub struct MtlDebug: u32 {
+        /*  MTL debug */
+        // #define MTL_DEBUG_TXSTSFSTS		BIT(5)
+        const TXSTSFSTS = 1 << 5;
+        // #define MTL_DEBUG_TXFSTS		BIT(4)
+        const TXFSTS = 1 << 4;
+        // #define MTL_DEBUG_TWCSTS		BIT(3)
+        const TWCSTS = 1 << 3;
+
+        // /* MTL debug: Tx FIFO Read Controller Status */
+        // #define MTL_DEBUG_TRCSTS_MASK		GENMASK(2, 1)
+        const TRCSTS_MASK = 0b11 << 1;
+        // #define MTL_DEBUG_TRCSTS_SHIFT		1
+        // #define MTL_DEBUG_TRCSTS_IDLE		0
+        // #define MTL_DEBUG_TRCSTS_READ		1
+        // #define MTL_DEBUG_TRCSTS_TXW		2
+        // #define MTL_DEBUG_TRCSTS_WRITE		3
+        // #define MTL_DEBUG_TXPAUSED		BIT(0)
+        }
+    }
+
+    pub fn debug_mtl_tx_fifo_read_controller_status(status: u32) {
+        //     if (value & MTL_DEBUG_TXSTSFSTS)
+        //     x->mtl_tx_status_fifo_full++;
+        // if (value & MTL_DEBUG_TXFSTS)
+        //     x->mtl_tx_fifo_not_empty++;
+        // if (value & MTL_DEBUG_TWCSTS)
+        //     x->mmtl_fifo_ctrl++;
+        // if (value & MTL_DEBUG_TRCSTS_MASK) {
+        //     u32 trcsts = (value & MTL_DEBUG_TRCSTS_MASK)
+        //              >> MTL_DEBUG_TRCSTS_SHIFT;
+        //     if (trcsts == MTL_DEBUG_TRCSTS_WRITE)
+        //         x->mtl_tx_fifo_read_ctrl_write++;
+        //     else if (trcsts == MTL_DEBUG_TRCSTS_TXW)
+        //         x->mtl_tx_fifo_read_ctrl_wait++;
+        //     else if (trcsts == MTL_DEBUG_TRCSTS_READ)
+        //         x->mtl_tx_fifo_read_ctrl_read++;
+        //     else
+        //         x->mtl_tx_fifo_read_ctrl_idle++;
+        // }
+        // if (value & MTL_DEBUG_TXPAUSED)
+        //     x->mac_tx_in_pause++;
+        let fifo_full = status & MtlDebug::TXSTSFSTS.bits() != 0;
+        let fifo_not_empty = status & MtlDebug::TXFSTS.bits() != 0;
+        let mtl_fifo_ctrl = status & MtlDebug::TWCSTS.bits() != 0;
+        let trcsts = (status & MtlDebug::TRCSTS_MASK.bits()) >> 1;
+        if trcsts != 0 {
+            let ctrl = match trcsts {
+                0 => "idle",
+                1 => "read",
+                2 => "txw",
+                3 => "write",
+                _ => "unknown",
+            };
+            log::debug!("fifo_full: {fifo_full}, fifo_not_empty: {fifo_not_empty}, mtl_fifo_ctrl: {mtl_fifo_ctrl}, ctrl: {ctrl}");
+        } else {
+            log::debug!("fifo_full: {fifo_full}, fifo_not_empty: {fifo_not_empty}, mtl_fifo_ctrl: {mtl_fifo_ctrl}");
+        }
+    }
 }
 
 /// DMA registers
@@ -393,8 +455,6 @@ pub mod dma {
 
     // Descriptor bits
     pub const DESC_OWN: u32 = 1 << 31;
-    pub const DESC_FIRST: u32 = 1 << 28;
-    pub const DESC_LAST: u32 = 1 << 29;
 
     // /* RDES3 (write back format) */
     // #define RDES3_PACKET_SIZE_MASK		GENMASK(14, 0)
@@ -432,6 +492,59 @@ pub mod dma {
             const FIRST_DESCRIPTOR = 1 << 29;
             const LAST_DESCRIPTOR = 1 << 28;
         }
+    }
+
+    bitflags! {
+        pub struct TDES3WB: u32 {
+            // #define TDES3_IP_HDR_ERROR		BIT(0)
+            const IP_HDR_ERROR = 1 << 0;
+            // #define TDES3_DEFERRED			BIT(1)
+            const DEFERRED = 1 << 1;
+            // #define TDES3_UNDERFLOW_ERROR		BIT(2)
+            const UNDERFLOW_ERROR = 1 << 2;
+            // #define TDES3_EXCESSIVE_DEFERRAL	BIT(3)
+            const EXCESSIVE_DEFERRAL = 1 << 3;
+            // #define TDES3_COLLISION_COUNT_MASK	GENMASK(7, 4)
+            const COLLISION_COUNT_MASK = 0b1111 << 4;
+            // #define TDES3_COLLISION_COUNT_SHIFT	4
+            // const COLLISION_COUNT_SHIFT = 4;
+            // #define TDES3_EXCESSIVE_COLLISION	BIT(8)
+            const EXCESSIVE_COLLISION = 1 << 8;
+            // #define TDES3_LATE_COLLISION		BIT(9)
+            const LATE_COLLISION = 1 << 9;
+            // #define TDES3_NO_CARRIER		BIT(10)
+            const NO_CARRIER = 1 << 10;
+            // #define TDES3_LOSS_CARRIER		BIT(11)
+            const LOSS_CARRIER = 1 << 11;
+            // #define TDES3_PAYLOAD_ERROR		BIT(12)
+            const PAYLOAD_ERROR = 1 << 12;
+            // #define TDES3_PACKET_FLUSHED		BIT(13)
+            const PACKET_FLUSHED = 1 << 13;
+            // #define TDES3_JABBER_TIMEOUT		BIT(14)
+            const JABBER_TIMEOUT = 1 << 14;
+            // #define TDES3_ERROR_SUMMARY		BIT(15)
+            const ERROR_SUMMARY = 1 << 15;
+            // #define TDES3_TIMESTAMP_STATUS		BIT(17)
+            const TIMESTAMP_STATUS = 1 << 17;
+        }
+    }
+
+    pub fn debug_tdes3_writeback(tdes3: u32) {
+        let ip_hdr_error = tdes3 & TDES3WB::IP_HDR_ERROR.bits() != 0;
+        let deferred = tdes3 & TDES3WB::DEFERRED.bits() != 0;
+        let underflow_error = tdes3 & TDES3WB::UNDERFLOW_ERROR.bits() != 0;
+        let excessive_deferral = tdes3 & TDES3WB::EXCESSIVE_DEFERRAL.bits() != 0;
+        let collision_count = (tdes3 & TDES3WB::COLLISION_COUNT_MASK.bits()) >> 4;
+        let excessive_collision = tdes3 & TDES3WB::EXCESSIVE_COLLISION.bits() != 0;
+        let late_collision = tdes3 & TDES3WB::LATE_COLLISION.bits() != 0;
+        let no_carrier = tdes3 & TDES3WB::NO_CARRIER.bits() != 0;
+        let loss_carrier = tdes3 & TDES3WB::LOSS_CARRIER.bits() != 0;
+        let payload_error = tdes3 & TDES3WB::PAYLOAD_ERROR.bits() != 0;
+        let packet_flushed = tdes3 & TDES3WB::PACKET_FLUSHED.bits() != 0;
+        let jabber_timeout = tdes3 & TDES3WB::JABBER_TIMEOUT.bits() != 0;
+        let error_summary = tdes3 & TDES3WB::ERROR_SUMMARY.bits() != 0;
+        let timestamp_status = tdes3 & TDES3WB::TIMESTAMP_STATUS.bits() != 0;
+        log::warn!("TDES3WB: {tdes3:#x}, IP_HDR_ERROR: {ip_hdr_error}, DEFERRED: {deferred}, UNDERFLOW_ERROR: {underflow_error}, EXCESSIVE_DEFERRAL: {excessive_deferral}, COLLISION_COUNT: {collision_count}, EXCESSIVE_COLLISION: {excessive_collision}, LATE_COLLISION: {late_collision}, NO_CARRIER: {no_carrier}, LOSS_CARRIER: {loss_carrier}, PAYLOAD_ERROR: {payload_error}, PACKET_FLUSHED: {packet_flushed}, JABBER_TIMEOUT: {jabber_timeout}, ERROR_SUMMARY: {error_summary}, TIMESTAMP_STATUS: {timestamp_status}");
     }
 
     pub const GMAC_Q0_TX_FLOW_CTRL: usize = 0x0070;
