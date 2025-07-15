@@ -1012,23 +1012,6 @@ impl<H: DwmacHal> DwmacNic<H> {
         self.write_reg(offset, (self.read_reg(offset) & !mask) | (value & mask));
     }
 
-    /// 写入TX DMA轮询请求寄存器
-    fn start_tx_dma(&self) {
-        self.set_bits(regs::dma::CHAN_TX_CTRL, 1, 1);
-    }
-
-    fn start_rx_dma(&self) {
-        self.set_bits(regs::dma::CHAN_RX_CTRL, 1, 1);
-    }
-
-    fn write_rx_tail_id(&self) {
-        mb();
-        self.write_reg(
-            regs::dma::CHAN_RX_END_ADDR,
-            self.rx_ring.get_descriptor_paddr(self.rx_ring.tail()) as u32,
-        );
-    }
-
     // fn update_link_status(&self) {
     //     let status = self.read_reg(regs::mac::INTERRUPT_STATUS);
     //     if status & regs::mac::MacInterruptStatus::LINK_UP.bits() != 0 {
@@ -1116,10 +1099,6 @@ impl<H: DwmacHal> DwmacNic<H> {
             self.write_reg(regs::dma::CHAN_STATUS, status);
         }
     }
-
-    fn start_dma_rx(&self) {
-        self.set_bits(regs::dma::CHAN_RX_CTRL, 1, 1);
-    }
 }
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -1188,7 +1167,6 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
-        mb();
         // self.inspect_dma_regs();
         // self.inspect_mtl_regs();
         // self.scan_rx_ring();
@@ -1215,7 +1193,6 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
 
         log::trace!("RX buffer recycled, RX index: {}", head);
 
-        mb();
         self.update_rx_end_addr(head);
 
         self.clear_intr_status();
