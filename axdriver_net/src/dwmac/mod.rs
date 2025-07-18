@@ -417,12 +417,18 @@ impl<H: DwmacHal> DwmacNic<H> {
         mb();
         nic.reset_dma()?;
 
+        // Initialize PHYs
+        mb();
+        let _ = nic.init_phy(0).inspect_err(|e| {
+            log::error!("PHY initialization failed: {:?}", e);
+        });
+
         // clk_get_rate(clk=00000000ff7456e0)
         // clk_get_rate(clk=00000000ff72c1c0)
         // clk_get_parent_rate(clk=00000000ff72c1c0)
         // clk_get_parent(clk=00000000ff72c1c0)
         // debug_writel: 00000000160400dc = 0x0000007c
-        nic.set_clock_freq(0x7c);
+        nic.set_clock_freq(0x7c)?;
 
         // eqos_mdio_read(dev=00000000ff728340, addr=0, reg=1):
         // eqos_mdio_read: val=796d
@@ -436,12 +442,6 @@ impl<H: DwmacHal> DwmacNic<H> {
         // eqos_adjust_link(dev=00000000ff728340):
         // eqos_set_full_duplex(dev=00000000ff728340):
         // eqos_set_mii_speed_100(dev=00000000ff728340):
-
-        // Initialize PHYs
-        mb();
-        let _ = nic.init_phy(0).inspect_err(|e| {
-            log::error!("PHY initialization failed: {:?}", e);
-        });
 
         // debug_writel: 0000000016040d18 = 0x00000010
 
@@ -581,10 +581,33 @@ impl<H: DwmacHal> DwmacNic<H> {
         Ok(())
     }
 
-    fn set_clock_freq(&self, freq: u32) {
+    fn set_clock_freq(&self, freq: u32) -> Result<(), &'static str> {
         log::info!("🔧 Setting clock frequency to {} MHz", freq);
         self.write_reg(regs::mac::US_TIC_COUNTER, freq);
         self.inspect_reg("MAC US_TIC_COUNTER", regs::mac::US_TIC_COUNTER);
+
+        let phy = Yt8531cPhy::<H>::new(self.base_addr.as_ptr() as usize, 0);
+        for _ in 0..100 {
+            let bmsr = phy.read_reg(YT8531C_BMSR).map_err(|e| {
+                log::warn!("⚠️  PHY not responding: {:?}", e);
+                "PHY not responding"
+            })?;
+
+            // NOTE: 非常重要，PHY 稳定前配置 GMAC 会导致网卡无法正常工作。
+            if bmsr == 0x796d {
+                // 0x796d is target value
+                log::info!("🔍 PHY BMSR: {:#x}", bmsr);
+                break;
+            }
+            H::wait_until(core::time::Duration::from_millis(10))?;
+        }
+
+        phy.setbits_ext_reg(YT8531C_EXT_RGMII_CONFIG1, 0x4000, 0x4000)
+            .map_err(|e| {
+                log::error!("⚠️  PHY not responding: {:?}", e);
+                "PHY not responding"
+            })?;
+        Ok(())
     }
 
     /// Setup DMA descriptor rings
