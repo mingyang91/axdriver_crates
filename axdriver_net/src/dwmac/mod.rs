@@ -503,7 +503,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         // StarFive #
 
         nic.start_dma()?;
-        // nic.enable_dma_interrupts()?;
+        nic.enable_dma_interrupts()?;
         nic.start_mac()?;
 
         nic.inspect_reg("DMA STATUS", regs::dma::DMA_STATUS);
