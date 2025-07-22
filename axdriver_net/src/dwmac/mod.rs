@@ -503,8 +503,8 @@ impl<H: DwmacHal> DwmacNic<H> {
         // StarFive #
 
         nic.start_dma()?;
-        nic.enable_dma_interrupts()?;
         nic.start_mac()?;
+        nic.enable_dma_interrupts()?;
 
         nic.inspect_reg("DMA STATUS", regs::dma::DMA_STATUS);
 
@@ -517,17 +517,26 @@ impl<H: DwmacHal> DwmacNic<H> {
         log::info!("🔧 Enabling DMA channel 0 interrupts...");
         self.write_reg(regs::mac::INTERRUPT_ENABLE, 0x0);
 
+        self.write_reg(
+            regs::dma::CHAN_STATUS,
+            self.read_reg(regs::dma::CHAN_STATUS),
+        );
+        self.inspect_reg("DMA CHAN_STATUS", regs::dma::CHAN_STATUS);
+
         self.inspect_reg("DMA CHAN_INTR_ENABLE", regs::dma::CHAN_INTR_ENABLE);
         self.write_reg(
             regs::dma::CHAN_INTR_ENABLE,
-            regs::dma::InterruptMask::DEFAULT_MASK_4_10.bits(),
+            regs::dma::InterruptMask::DEFAULT_MASK_4_10.bits(), // from linux: 0x0000D041
         );
         self.inspect_reg("DMA CHAN_INTR_ENABLE", regs::dma::CHAN_INTR_ENABLE);
 
         log::info!("🔧 Enabling GMAC interrupts...");
 
         self.inspect_reg("MAC INTERRUPT_STATUS", regs::mac::INTERRUPT_STATUS);
-        self.write_reg(regs::mac::INTERRUPT_STATUS, 0x1);
+        self.write_reg(
+            regs::mac::INTERRUPT_STATUS,
+            self.read_reg(regs::mac::INTERRUPT_STATUS),
+        );
 
         if self.read_reg(regs::mac::INTERRUPT_STATUS) != 0 {
             log::info!("🔧 Waiting for GMAC interrupt status to clear...");
@@ -548,7 +557,9 @@ impl<H: DwmacHal> DwmacNic<H> {
 
         self.write_reg(
             regs::mac::INTERRUPT_ENABLE,
-            regs::mac::INT_DEFAULT_ENABLE | regs::mac::MacInterruptEnable::RGMII.bits(),
+            0x30, // regs::mac::PCS_IRQ_DEFAULT
+                  //     | regs::mac::INT_DEFAULT_ENABLE
+                  //     | regs::mac::MacInterruptEnable::RGMII.bits(), // from linux: 0x00000030
         );
         self.inspect_reg("MAC INTERRUPT_ENABLE", regs::mac::INTERRUPT_ENABLE);
 
