@@ -180,12 +180,13 @@ pub mod mac {
         }
     }
 
-    pub const PCS_IRQ_DEFAULT: u32 = MacInterruptEnable::PMT_EN.bits()
+    pub const PCS_IRQ_DEFAULT: u32 = MacInterruptEnable::RGMII.bits()
+        | MacInterruptEnable::PCS_LINK.bits()
+        | MacInterruptEnable::PCS_ANE.bits();
+
+    pub const INT_DEFAULT_ENABLE: u32 = MacInterruptEnable::PMT_EN.bits()
         | MacInterruptEnable::LPI_EN.bits()
         | MacInterruptEnable::TSIE.bits();
-
-    pub const INT_DEFAULT_ENABLE: u32 =
-        MacInterruptEnable::PCS_LINK.bits() | MacInterruptEnable::PCS_ANE.bits();
 
     // /* MAC config */
     // #define GMAC_CONFIG_RE			BIT(0)
@@ -291,10 +292,11 @@ pub mod mac {
 /// MTL registers
 pub mod mtl {
     use bitflags::bitflags;
-    pub const BASE_ADDR: usize = 0xd00;
+    pub const INTERRUPT_STATUS: usize = 0xc20;
     pub const TXQ0_OPERATION_MODE: usize = 0xd00;
     pub const TXQ0_DEBUG: usize = 0xd08;
     pub const TXQ0_QUANTUM_WEIGHT: usize = 0xd18;
+    pub const Q0_INTR_STATUS: usize = 0xd2c;
     pub const RXQ0_OPERATION_MODE: usize = 0xd30;
     pub const RXQ0_DEBUG: usize = 0xd38;
 
