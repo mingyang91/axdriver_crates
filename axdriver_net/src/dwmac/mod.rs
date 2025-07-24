@@ -17,7 +17,7 @@ use crate::dwmac::regs::dma::{
     debug_chan_status, debug_tdes3_writeback, DESC_OWN, DMA_CHAN_STATUS_ERI, DMA_CHAN_STATUS_ETI,
     RDES3, TDES3WB,
 };
-use crate::dwmac::regs::mac::PACKET_FILTER_ALL;
+use crate::dwmac::regs::mac::{PACKET_FILTER_ALL, PHYIF_CONTROL_STATUS};
 use crate::dwmac::regs::mtl::debug_mtl_tx_fifo_read_controller_status;
 use crate::{EthernetAddress, NetBufPtr, NetDriverOps};
 use axdriver_base::{BaseDriverOps, DevError, DevResult, DeviceType};
@@ -430,11 +430,18 @@ impl<H: DwmacHal> DwmacNic<H> {
         // debug_writel: 00000000160400dc = 0x0000007c
         nic.set_clock_freq(0x7c)?;
 
+        // disable lpi mode
+        // 20,16,19,21
+        let lpi_status = nic.read_reg(regs::mac::LPI_CONTROL_STATUS);
+        nic.write_reg(
+            regs::mac::LPI_CONTROL_STATUS,
+            lpi_status & !(1 << 20 | 1 << 16 | 1 << 19 | 1 << 21),
+        );
         // linux enable interrupt after set clock frequency
         nic.write_reg(
             regs::mac::INTERRUPT_ENABLE,
-            // regs::mac::MacInterruptEnable::RGMII.bits(),
-            regs::mac::PCS_IRQ_DEFAULT,
+            regs::mac::MacInterruptEnable::RGMII.bits(),
+            // regs::mac::PCS_IRQ_DEFAULT,
             // | regs::mac::INT_DEFAULT_ENABLE,
         );
 
@@ -463,7 +470,7 @@ impl<H: DwmacHal> DwmacNic<H> {
 
         nic.stop_dma();
         // debug_writel: 0000000016041004 = 0x0002080e
-        nic.set_sys_bus_mode(0x030308F1); // dump from Linux
+        nic.set_sys_bus_mode(0x030308F1); // dump from Linux: 0x030308F1
         nic.set_bus_mode(0x0);
 
         // debug_writel: 0000000016041110 = 0x00000000
@@ -699,7 +706,7 @@ impl<H: DwmacHal> DwmacNic<H> {
     fn start_mac(&self) -> Result<(), &'static str> {
         log::info!("🔧 Configuring MAC");
 
-        self.write_reg(regs::mac::FRAME_FILTER, 0x404); //regs::mac::PacketFilter::PR.bits());
+        self.write_reg(regs::mac::FRAME_FILTER, 0x404); //regs::mac::PacketFilter::PR.bits()); // dump from linux: 0x404
         self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
 
         // // setbits_le32 mac_regs->configuration(0000000016040000): 30e003
@@ -819,7 +826,7 @@ impl<H: DwmacHal> DwmacNic<H> {
         self.write_reg(regs::mac::RXQ_CTRL1, 0);
         self.inspect_reg("MAC RXQ_CTRL1", regs::mac::RXQ_CTRL1);
         // setbits_le32 mac_regs->unused_004[1](0000000016040008): 1
-        self.write_reg(regs::mac::FRAME_FILTER, 0x404); //PACKET_FILTER_ALL);
+        self.write_reg(regs::mac::FRAME_FILTER, 0x404); //regs::mac::PacketFilter::PR.bits()); // dump from linux: 0x404
         self.inspect_reg("MAC FRAME_FILTER", regs::mac::FRAME_FILTER);
         // setbits_le32 mac_regs->q0_tx_flow_ctrl(0000000016040070): ffff0000
         self.write_reg(regs::mac::Q0_TX_FLOW_CTRL, 0xffff0000);
@@ -1100,9 +1107,11 @@ impl<H: DwmacHal> DwmacNic<H> {
         //     log::info!("DMA_INTR_STATUS: {:#x}", dma_intr_status);
         //     self.write_reg(0x1100 + 0x60, dma_intr_status);
         // }
-        let dma_chan0_debug_status = self.read_reg(regs::dma::CHAN_STATUS);
-        if dma_chan0_debug_status != 0 {
-            regs::dma::debug_chan_status(dma_chan0_debug_status);
+        for i in 0..=7 {
+            let dma_chan_status = self.read_reg(regs::dma::chan_status_csr(i));
+            if dma_chan_status != 0 {
+                regs::dma::debug_chan_status(i, dma_chan_status);
+            }
         }
         // let tx_fsm = dma_chan0_debug_status & 0x7;
         // let rx_fsm = (dma_chan0_debug_status >> 16) & 0x7;
@@ -1135,19 +1144,22 @@ impl<H: DwmacHal> DwmacNic<H> {
         }
     }
 
-    fn clear_intr_status(&self) {
+    fn read_mac_intr_status(&self) {
         // read mac_intr_status to clear interrupt
         let mac_intr_status = self.read_reg(regs::mac::INTERRUPT_STATUS);
         if mac_intr_status != 0 {
-            log::trace!("MAC_INTR_STATUS: {:#x}", mac_intr_status);
+            log::debug!("MAC_INTR_STATUS: {:#x}", mac_intr_status);
         }
-
-        let chan_status =
-            self.read_reg(regs::dma::CHAN_INTR_ENABLE) & self.read_reg(regs::dma::CHAN_STATUS);
-        if chan_status != 0 {
-            debug_chan_status(chan_status);
-            debug_mtl_tx_fifo_read_controller_status(self.read_reg(regs::mtl::TXQ0_DEBUG));
-            self.write_reg(regs::dma::CHAN_STATUS, chan_status);
+        if mac_intr_status & 1 != 0 {
+            let phyif_ctrl = self.read_reg(regs::mac::PHYIF_CONTROL_STATUS);
+            log::debug!("PHYIF_CONTROL_STATUS: {:#x}", phyif_ctrl);
+        } else if mac_intr_status & 0x20 != 0 {
+            let lpi_status = self.read_reg(regs::mac::LPI_CONTROL_STATUS);
+            log::debug!("LPI_CONTROL_STATUS: {:#x}", lpi_status);
+            self.write_reg(
+                regs::mac::LPI_CONTROL_STATUS,
+                lpi_status & !(1 << 20 | 1 << 16 | 1 << 19 | 1 << 21),
+            );
         }
 
         let mtl_intr_status = self.read_reg(regs::mtl::INTERRUPT_STATUS);
@@ -1165,6 +1177,17 @@ impl<H: DwmacHal> DwmacNic<H> {
         let pcs_isr = self.read_reg(0xe4);
         if pcs_isr != 0 {
             log::trace!("PCS_ISR: {:#x}", pcs_isr);
+        }
+    }
+
+    fn clear_dma_intr_status(&self) {
+        for i in 0..=7 {
+            let chan_status = self.read_reg(regs::dma::chan_status_csr(i));
+            if chan_status != 0 {
+                regs::dma::debug_chan_status(i, chan_status);
+                debug_mtl_tx_fifo_read_controller_status(self.read_reg(regs::mtl::TXQ0_DEBUG));
+                self.write_reg(regs::dma::chan_status_csr(i), chan_status);
+            }
         }
     }
 }
@@ -1188,9 +1211,8 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn can_transmit(&self) -> bool {
-        self.inspect_dma_regs();
-        self.inspect_mtl_regs();
-        self.clear_intr_status();
+        // self.inspect_dma_regs();
+        // self.inspect_mtl_regs();
         self.link_up.load(Ordering::Acquire) && self.tx_ring.has_available_tx()
     }
 
@@ -1237,7 +1259,13 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
         Ok(())
     }
 
+    fn clear_intr_status(&mut self) {
+        self.read_mac_intr_status();
+        self.clear_dma_intr_status();
+    }
+
     fn receive(&mut self) -> DevResult<NetBufPtr> {
+        self.inspect_dma_regs();
         // self.scan_rx_ring();
         if !self.can_receive() {
             return Err(DevError::Again);
@@ -1280,7 +1308,7 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
     }
 
     fn recycle_tx_buffers(&mut self) -> DevResult {
-        let _ = self.tx_ring.reclaim_tx_descriptors();
+        self.tx_ring.reclaim_tx_descriptors();
         Ok(())
     }
 

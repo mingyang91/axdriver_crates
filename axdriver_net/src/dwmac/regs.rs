@@ -151,6 +151,7 @@ pub mod mac {
     pub const ADDRESS0_LOW: usize = 0x0304;
     pub const INTERRUPT_STATUS: usize = 0x00b0;
     pub const INTERRUPT_ENABLE: usize = 0x00b4;
+    pub const LPI_CONTROL_STATUS: usize = 0x00d0;
     pub const PHYIF_CONTROL_STATUS: usize = 0x00f8;
     pub const DEBUG_STATUS: usize = 0x0114;
 
@@ -388,6 +389,10 @@ pub mod dma {
     pub const CHAN_CUR_TX_DESC: usize = CHAN_BASE_ADDR + 0x44;
     pub const CHAN_CUR_RX_DESC: usize = CHAN_BASE_ADDR + 0x4c;
     pub const CHAN_STATUS: usize = CHAN_BASE_ADDR + 0x60;
+    #[inline(always)]
+    pub fn chan_status_csr(n: usize) -> usize {
+        CHAN_BASE_ADDR + n * 0x100 + 0x60
+    }
 
     /* Interrupt status per channel */
     // #define DMA_CHAN_STATUS_REB		GENMASK(21, 19)
@@ -424,7 +429,7 @@ pub mod dma {
     pub const DMA_CHAN_STATUS_TPS: u32 = 1 << 1;
     // #define DMA_CHAN_STATUS_TI		BIT(0)
     pub const DMA_CHAN_STATUS_TI: u32 = 1 << 0;
-    pub fn debug_chan_status(status: u32) {
+    pub fn debug_chan_status(n: usize, status: u32) {
         let rebs = (status & DMA_CHAN_STATUS_REB) >> DMA_CHAN_STATUS_REB_SHIFT;
         let tebs = (status & DMA_CHAN_STATUS_TEB) >> DMA_CHAN_STATUS_TEB_SHIFT;
         let nis = status & DMA_CHAN_STATUS_NIS != 0;
@@ -440,7 +445,7 @@ pub mod dma {
         let tbu = status & DMA_CHAN_STATUS_TBU != 0;
         let tps = status & DMA_CHAN_STATUS_TPS != 0;
         let ti = status & DMA_CHAN_STATUS_TI != 0;
-        log::trace!("DMA_CHAN_STATUS: {status:#x}, REB: {rebs}, TEB: {tebs}, NIS: {nis}, AIS: {ais}, CDE: {cde}, FBE: {fbe}, ERI: {eri}, ETI: {eti}, RWT: {rwt}, RPS: {rps}, RBU: {rbu}, RI: {ri}, TBU: {tbu}, TPS: {tps}, TI: {ti}");
+        log::trace!("DMA_CHAN{n}_STATUS: {status:#x}, REB: {rebs}, TEB: {tebs}, NIS: {nis}, AIS: {ais}, CDE: {cde}, FBE: {fbe}, ERI: {eri}, ETI: {eti}, RWT: {rwt}, RPS: {rps}, RBU: {rbu}, RI: {ri}, TBU: {tbu}, TPS: {tps}, TI: {ti}");
     }
 
     pub const STATUS: usize = 0x1014;

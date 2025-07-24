@@ -68,6 +68,9 @@ pub trait NetDriverOps: BaseDriverOps {
     /// Allocate a memory buffer of a specified size for network transmission,
     /// returns [`DevResult`]
     fn alloc_tx_buffer(&mut self, size: usize) -> DevResult<NetBufPtr>;
+
+    /// Clear the interrupt status.
+    fn clear_intr_status(&mut self) {}
 }
 
 /// A raw buffer struct for network device.
