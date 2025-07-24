@@ -219,8 +219,11 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
             let desc = &mut self.descriptors_mut()[i];
             desc.set_buffer_paddr(self.mem_pool.bus_addr(buffer));
             desc.basic.set_des2(0); // we don't need to set buffer size
-            desc.basic
-                .set_des3(regs::dma::DESC_OWN | RDES3::BUFFER1_VALID_ADDR.bits());
+            desc.basic.set_des3(
+                regs::dma::DESC_OWN
+                    | RDES3::BUFFER1_VALID_ADDR.bits()
+                    | RDES3::INT_ON_COMPLETION_EN.bits(),
+            );
         }
 
         self.head.store(0, Ordering::Relaxed);
@@ -353,8 +356,11 @@ impl<const N: usize, H: DwmacHal> DescriptorRing<N, H> {
     pub fn recycle_rx_descriptor(&mut self, desc_index: usize) -> Result<(), &'static str> {
         let desc = &mut self.descriptors_mut()[desc_index];
 
-        desc.basic
-            .set_des3(regs::dma::DESC_OWN | RDES3::BUFFER1_VALID_ADDR.bits());
+        desc.basic.set_des3(
+            regs::dma::DESC_OWN
+                | RDES3::BUFFER1_VALID_ADDR.bits()
+                | RDES3::INT_ON_COMPLETION_EN.bits(),
+        );
 
         Ok(())
     }
@@ -1180,15 +1186,24 @@ impl<H: DwmacHal> DwmacNic<H> {
         }
     }
 
-    fn clear_dma_intr_status(&self) {
+    fn clear_dma_intr_status(&self) -> bool {
         for i in 0..=7 {
             let chan_status = self.read_reg(regs::dma::chan_status_csr(i));
             if chan_status != 0 {
                 regs::dma::debug_chan_status(i, chan_status);
                 debug_mtl_tx_fifo_read_controller_status(self.read_reg(regs::mtl::TXQ0_DEBUG));
-                self.write_reg(regs::dma::chan_status_csr(i), chan_status);
+                let mask = self.read_reg(regs::dma::CHAN_INTR_ENABLE);
+                if chan_status & mask != 0 {
+                    self.write_reg(regs::dma::chan_status_csr(i), chan_status & mask);
+                }
+            }
+
+            if chan_status & regs::dma::DMA_CHAN_STATUS_RI != 0 {
+                return true;
             }
         }
+
+        false
     }
 }
 
@@ -1259,13 +1274,13 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
         Ok(())
     }
 
-    fn clear_intr_status(&mut self) {
+    fn clear_intr_status(&mut self) -> bool {
         self.read_mac_intr_status();
-        self.clear_dma_intr_status();
+        self.clear_dma_intr_status()
     }
 
     fn receive(&mut self) -> DevResult<NetBufPtr> {
-        self.inspect_dma_regs();
+        // self.inspect_dma_regs();
         // self.scan_rx_ring();
         if !self.can_receive() {
             return Err(DevError::Again);
@@ -1285,8 +1300,11 @@ impl<H: DwmacHal> NetDriverOps for DwmacNic<H> {
 
         desc.set_buffer_paddr(bus_addr);
         desc.basic.set_des2(0);
-        desc.basic
-            .set_des3(regs::dma::DESC_OWN | RDES3::BUFFER1_VALID_ADDR.bits());
+        desc.basic.set_des3(
+            regs::dma::DESC_OWN
+                | RDES3::BUFFER1_VALID_ADDR.bits()
+                | RDES3::INT_ON_COMPLETION_EN.bits(),
+        );
 
         log::trace!("RX buffer recycled, RX index: {}", head);
 

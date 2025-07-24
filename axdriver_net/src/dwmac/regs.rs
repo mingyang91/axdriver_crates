@@ -601,14 +601,12 @@ pub mod dma {
             const ERE = 1 << 11;
             const FBE = 1 << 12;
             const CDE = 1 << 13;
-            const AIE_4_10 = 1 << 14;
-            const NIE_4_10 = 1 << 15;
-            const AIE = 1 << 15;
-            const NIE = 1 << 16;
-            const NORMAL_4_10 = Self::NIE_4_10.bits()
+            const AIE = 1 << 14;
+            const NIE = 1 << 15;
+            const NORMAL_4_10 = Self::NIE.bits()
                               | Self::RIE.bits()
                               | Self::TIE.bits();
-            const ABNORMAL_4_10 = Self::AIE_4_10.bits()
+            const ABNORMAL_4_10 = Self::AIE.bits()
                                 | Self::FBE.bits();
             const DEFAULT_MASK_4_10 = Self::NORMAL_4_10.bits()
                                     | Self::ABNORMAL_4_10.bits();

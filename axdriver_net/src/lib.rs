@@ -70,7 +70,9 @@ pub trait NetDriverOps: BaseDriverOps {
     fn alloc_tx_buffer(&mut self, size: usize) -> DevResult<NetBufPtr>;
 
     /// Clear the interrupt status.
-    fn clear_intr_status(&mut self) {}
+    fn clear_intr_status(&mut self) -> bool {
+        false
+    }
 }
 
 /// A raw buffer struct for network device.
