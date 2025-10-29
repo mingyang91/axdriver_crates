@@ -18,7 +18,7 @@ categories.workspace = true
 default = []
 ixgbe = ["dep:ixgbe-driver"]
 fxmac = ["dep:fxmac_rs"]
-dwmac = []
+dwmac = ["dep:dwmac-rs"]
 
 [dependencies]
 spin = "0.9"
@@ -26,4 +26,5 @@ log = "0.4"
 axdriver_base = { workspace = true }
 ixgbe-driver = { git = "https://github.com/KuangjuX/ixgbe-driver.git", rev = "8e5eb74", optional = true }
 fxmac_rs = { git = "https://github.com/elliott10/fxmac_rs.git", rev = "0dbc3916", optional = true }
+dwmac-rs = { git = "https://github.com/mingyang91/dwmac-rs.git", rev = "d9fefcb882d558fc216876e74cf283dcaed5eea1", optional = true }
 bitflags = "2.9.1"
